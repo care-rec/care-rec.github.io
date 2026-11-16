@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = path.join(root, '配布用');
-const url = process.argv[2] || 'https://kaigo-camera.github.io/';
+const url = process.argv[2] || 'https://care-rec.github.io/';
 const src = fs.readFileSync(path.join(dir, '案内チラシ.html'), 'utf8').replaceAll('{{URL}}', url);
 const tmp = path.join(dir, '_build.html');
 fs.writeFileSync(tmp, src);
