@@ -3,7 +3,7 @@ import { BlurCamera } from './camera.js';
 import { CanvasRecorder, buildFileName, saveVideo } from './recorder.js';
 
 const $ = (id) => document.getElementById(id);
-const PRESETS = ['吸引', 'オムツ交換', '胃ろう注入', '着替え', '車いす移乗', '体位変換', '食事介助', '口腔ケア'];
+const PRESETS = ['吸引', 'オムツ交換', '胃ろう注入', '着替え', '車いす移乗', '体位変換', '食事介助', '口腔ケア', '嚥下訓練', '歩行', '自主トレ', '申し送り'];
 const KEY = 'kaigoCamera.customTitles';
 
 const screens = { title: $('screenTitle'), camera: $('screenCamera'), review: $('screenReview') };

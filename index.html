@@ -3,9 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>介護指導カメラ</title>
+<title>ケアREC</title>
+<meta name="description" content="自動顔ぼかし機能つき 医療・介護動画カメラ">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="介護指導カメラ">
+<meta name="apple-mobile-web-app-title" content="ケアREC">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#12343b">
 <link rel="manifest" href="manifest.json">
@@ -17,14 +18,15 @@
 <!-- 画面1：内容を選ぶ -->
 <main id="screenTitle" class="screen">
   <header class="top">
-    <h1>介護指導カメラ</h1>
-    <p class="lead">顔に自動でぼかしを入れて撮影します。ぼかし前の映像は保存されません。</p>
+    <h1>ケアREC<span class="ruby">ケアレック</span></h1>
+    <p class="tagline">自動顔ぼかし機能つき 医療・介護動画カメラ</p>
+    <p class="lead">医療・ケアの手技や動きを、プライバシーを守りながら記録・共有するカメラです。映った顔には自動でぼかしが入り、ぼかし前の映像は保存されません。</p>
   </header>
   <section class="block">
     <h2>何を撮りますか？</h2>
     <div id="titleList" class="chips"></div>
     <form id="addForm" class="addRow">
-      <input id="addInput" type="text" maxlength="20" placeholder="項目を追加（例：口腔ケア）" autocomplete="off">
+      <input id="addInput" type="text" maxlength="20" placeholder="項目を追加（例：服薬介助）" autocomplete="off">
       <button type="submit" class="btn sub">追加</button>
     </form>
     <p class="note">追加した項目は長押しで削除できます。</p>

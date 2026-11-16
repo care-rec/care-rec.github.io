@@ -1,6 +1,7 @@
 {
-  "name": "介護指導カメラ",
-  "short_name": "介護指導カメラ",
+  "name": "ケアREC",
+  "description": "自動顔ぼかし機能つき 医療・介護動画カメラ",
+  "short_name": "ケアREC",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

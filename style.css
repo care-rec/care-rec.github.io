@@ -26,6 +26,8 @@ body {
   max-width: 640px; margin: 0 auto;
 }
 .top h1 { font-size: 24px; margin: 0 0 4px; }
+.top h1 .ruby { font-size: 13px; font-weight: 600; color: var(--muted); margin-left: 8px; letter-spacing: .05em; }
+.tagline { margin: 0 0 6px; color: var(--accent); font-weight: 700; font-size: 14px; }
 .lead { margin: 0; color: var(--muted); font-size: 15px; }
 .block { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
 .block h2 { font-size: 18px; margin: 0 0 12px; }
