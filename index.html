@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>介護指導カメラ</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="介護指導カメラ">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#12343b">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 画面1：内容を選ぶ -->
+<main id="screenTitle" class="screen">
+  <header class="top">
+    <h1>介護指導カメラ</h1>
+    <p class="lead">顔に自動でぼかしを入れて撮影します。ぼかし前の映像は保存されません。</p>
+  </header>
+  <section class="block">
+    <h2>何を撮りますか？</h2>
+    <div id="titleList" class="chips"></div>
+    <form id="addForm" class="addRow">
+      <input id="addInput" type="text" maxlength="20" placeholder="項目を追加（例：口腔ケア）" autocomplete="off">
+      <button type="submit" class="btn sub">追加</button>
+    </form>
+    <p class="note">追加した項目は長押しで削除できます。</p>
+  </section>
+  <section class="block">
+    <label class="switchRow">
+      <span>
+        <strong>音声も録音する</strong>
+        <small>会話に名前が入るときは切にしてください</small>
+      </span>
+      <input id="audioToggle" type="checkbox" checked>
+    </label>
+  </section>
+  <section class="block">
+    <label class="switchRow">
+      <span>
+        <strong>寝ている人の顔もぼかす</strong>
+        <small>横になった顔も探します。ライトなどに余分なぼかしが入りやすくなります</small>
+      </span>
+      <input id="lyingToggle" type="checkbox" checked>
+    </label>
+  </section>
+  <details class="block help">
+    <summary>使い方と、撮る前の注意</summary>
+    <h3>使い方</h3>
+    <ol>
+      <li>撮る内容を選んで「撮影する」を押します。</li>
+      <li>映った顔には、最初からぼかしが入ります。ぼかしたくない人の顔をタップすると、その人だけ外れます。もう一度タップすると戻ります。</li>
+      <li>赤いボタンで録画を始め、もう一度押して止めます。</li>
+      <li>確認の画面で最後まで再生し、ぼかしたい顔が見えていないか確かめます。</li>
+      <li>「保存する」を押し、「ビデオを保存」（写真アプリに入ります）か「"ファイル"に保存」を選びます。</li>
+    </ol>
+    <h3>撮る前の注意</h3>
+    <ul>
+      <li>写る人（ご本人・ご家族・職員）の了承を得てから撮ってください。病院や施設では、その場所の決まりに従ってください。</li>
+      <li>顔の自動検出は完全ではありません。横顔、寝ている顔、マスクの顔、遠くの顔、画面の端の顔は、ぼかしが入らないことがあります。保存の前に必ず再生して確かめてください。</li>
+      <li>ぼかすのは顔だけです。名札、書類、ベッドの名前、窓や鏡に映った顔、声に入った名前は隠れません。写らない向きで撮り、必要なら音声を切にしてください。</li>
+      <li>ぼかす前の映像は保存されません。映像がこのスマホの外に送られることもありません。</li>
+    </ul>
+    <h3>ホーム画面に置くには</h3>
+    <p>Safariの共有ボタン（四角から矢印が出ている印）を押し、「ホーム画面に追加」を選びます。次からはアイコンから開けます。</p>
+  </details>
+  <div class="bottomBar">
+    <button id="startCamera" class="btn primary" disabled>内容を選んでください</button>
+    <p id="offlineNote" class="note center" hidden></p>
+  </div>
+</main>
+
+<!-- 画面2：カメラ -->
+<main id="screenCamera" class="screen dark" hidden>
+  <div id="stage">
+    <canvas id="out"></canvas>
+    <canvas id="overlay"></canvas>
+    <div id="hint">ぼかしをかけたくない人の顔をタップしてください</div>
+    <div id="status" hidden></div>
+    <div id="recBadge" hidden><span class="dot"></span><span id="recTime">0:00</span></div>
+  </div>
+  <div class="camBar">
+    <button id="backBtn" class="btn ghost">もどる</button>
+    <button id="recBtn" class="recBtn" aria-label="録画開始" disabled><span></span></button>
+    <button id="flipBtn" class="btn ghost">切替</button>
+  </div>
+  <video id="cam" playsinline muted autoplay></video>
+</main>
+
+<!-- 画面3：確認 -->
+<main id="screenReview" class="screen" hidden>
+  <header class="top">
+    <h1 id="reviewName">確認</h1>
+    <p class="lead">最後まで再生して、<strong>ぼかしたい顔が見えていないか</strong>確認してください。</p>
+  </header>
+  <video id="review" controls playsinline></video>
+  <p id="reviewInfo" class="note"></p>
+  <div class="bottomBar two">
+    <button id="discardBtn" class="btn danger">撮り直す（破棄）</button>
+    <button id="saveBtn" class="btn primary">保存する</button>
+  </div>
+  <p id="saveMsg" class="note center"></p>
+  <button id="againBtn" class="btn sub wide" hidden>別の内容を撮る</button>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
