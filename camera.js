@@ -8,6 +8,7 @@
 
 import { FilesetResolver, FaceDetector } from './vendor/tasks-vision/vision_bundle.mjs';
 import { loadFaceId, faceIdReady, cropAligned, describe, distance } from './face-id.js';
+import { YuNetDetector } from './yunet.js';
 
 const HOLD_BLUR_MS = 1200;   // ぼかす顔を見失ってから、ぼかしを残す時間
 const HOLD_CLEAR_MS = 800;   // ぼかさない顔を見失ってから、選択を覚えておく時間（過ぎると選択解除＝ぼかしに戻る）
@@ -34,6 +35,16 @@ const VERIFY_EVERY_MS = 150; // 判断がつくまでの調べ直しの間隔
 const VERIFY_KEEP_MS = 500;  // 判断がついたあとも調べ続ける間隔
 const STRONG_SCORE = 0.75;   // 「顔ではない」とした枠でも、検出の点数がこれ以上になったらすぐぼかしに戻す
 const FAKE_ZONE_MS = 8000;   // 「顔ではない」と分かった場所を覚えておく時間。同じ場所に出た枠は、ぼかす前に調べる
+// もう1つの顔検出（YuNet）。マスク＋横顔・寝ている顔に強い。別の流れで、向きを変えながらくり返し探す
+const Y_OK = 0.6;             // まっすぐの向きでこの点数以上なら「顔」
+const Y_OK_TURNED = 0.7;      // 回転させた向きでは基準を上げる（ライトなどが通りにくいように）
+const Y_HINT = 0.45;          // これ以上なら「顔がまだそこにある」手がかりとして扱う
+const Y_RECENT_MS = 3000;     // YuNetが顔と判断してからこの時間は、ほかの調べ直しで「顔ではない」にしない
+const Y_GONE_MS = 2000;       // 「顔がもう無い」と判断するには、この時間YuNetの手がかりも無いこと
+// 見た目の追いかけ（検出が途切れても、顔の見た目を手がかりに毎コマぼかしを動かす）
+const GRAY_W = 160;           // 追いかけに使う縮小画面の幅
+const NCC_OK = 0.5;           // 見た目の似ている度合い（-1〜1）がこれ以上なら、同じ顔とみなして追う
+const FOLLOW_MAX_MS = 3000;   // 検出がなくても、見た目の追いかけだけでぼかしを続ける最大時間
 const BLUR_STEPS = [2, 3, 4]; // にじませる幅（顔の範囲を72に縮めた画面での幅）。大きいほど強いぼかし
 const BLUR_HAZE = 0.12;       // 白っぽさ（0〜1）
 
@@ -77,6 +88,13 @@ export class BlurCamera {
     this.vCanvas.width = 256; this.vCanvas.height = 256;
     this.vctx2 = this.vCanvas.getContext('2d', { alpha: false });
     this.onStatus = onStatus || (() => {});
+    this.yunet = null;          // もう1つの顔検出（読み込めたときだけ使う）
+    this.yBusy = false;
+    this.yQueue = [];
+    this.yIdx = 0;
+    this.grayCanvas = document.createElement('canvas');
+    this.gctx = this.grayCanvas.getContext('2d', { willReadFrequently: true });
+    this.gray = null;
 
     this.detector = null;
     this.detectorFailed = false;
@@ -124,11 +142,15 @@ export class BlurCamera {
       this.detectorFailed = true;
       throw e;
     }
-    // 顔を見分ける部品も準備中に読み込む（読み込み中は映像が一瞬止まるため、撮影前に済ませる）。
-    // 失敗しても、20秒かかっても、撮影はできる（その場合は位置の追跡だけになる）
+    // 顔を見分ける部品と、もう1つの顔検出も準備中に読み込む（読み込み中は映像が一瞬止まるため、撮影前に済ませる）。
+    // 失敗しても、時間がかかっても、撮影はできる（遅れて読み込めたら、その時から使う）
+    if (!this.yLoad) {
+      const y = new YuNetDetector();
+      this.yLoad = y.load().then((ok) => { if (ok) this.yunet = y; }).catch(() => {});
+    }
     await Promise.race([
-      loadFaceId().catch(() => {}),
-      new Promise((r) => setTimeout(r, 20000)),
+      Promise.all([loadFaceId().catch(() => {}), this.yLoad]),
+      new Promise((r) => setTimeout(r, 25000)),
     ]);
   }
 
@@ -177,6 +199,7 @@ export class BlurCamera {
     if (!this.locked && (this.out.width !== vw || this.out.height !== vh)) {
       for (const c of [this.out, this.raw, this.overlay]) { c.width = vw; c.height = vh; }
       this.tracks = [];
+      this.yQueue = [];
     }
     const W = this.out.width, H = this.out.height;
 
@@ -198,10 +221,14 @@ export class BlurCamera {
     let detected = false;
     if (this.detector) {
       try {
+        this._grayUpdate(W, H);
         this._updateTracks(this._detect(W, H, now), now);
+        this._applyYunet(now, W, H);
+        this._follow(now, W, H);
         this._verify(now);
         detected = true;
         this._identify(now);
+        this._scheduleYunet(now, W, H);
       } catch (e) {
         detected = false;
       }
@@ -252,9 +279,12 @@ export class BlurCamera {
     }
     // 顔らしさがまったく無い状態が続いたら、顔はもうそこに無いと判断する。
     // （カメラをそらした直後、追跡が背景に取り残されて、ぼかしが残るのを防ぐ）
+    // ただし、マスクの横顔などはこの調べ方では点数が出ないので、YuNetの手がかりも無いときだけにする
     pick.lowN = score < GONE_SCORE ? (pick.lowN || 0) + 1 : 0;
-    if (pick.lowN >= GONE_TIMES && !pick.fake) {
+    const yHint = now - (pick.yAt || -1e9) < Y_GONE_MS;
+    if (pick.lowN >= GONE_TIMES && !pick.fake && !yHint) {
       pick.strong = false; pick.vAvg = score; pick.vN = VERIFY_MIN_SAMPLES;
+      pick.followAt = 0; pick.tpl = null;   // 見た目の追いかけもやめる
     }
     // 点数の平均を更新
     pick.vAvg = pick.vN ? pick.vAvg * 0.6 + score * 0.4 : score;
@@ -265,7 +295,8 @@ export class BlurCamera {
     if (usedRot === 0 ? score >= VERIFY_STRONG : (pick.vN >= 4 && pick.vAvg >= VERIFY_STRONG)) pick.strong = true;
     const turned = (pick.rot || 0) !== 0;
     const okLine = turned ? VERIFY_OK_TURNED : VERIFY_OK, ngLine = turned ? VERIFY_NG_TURNED : VERIFY_NG;
-    if (pick.strong || pick.vAvg >= okLine) {
+    const yOk = now - (pick.yOkAt || -1e9) < Y_RECENT_MS;   // YuNetが最近「顔」と判断した
+    if (pick.strong || yOk || pick.vAvg >= okLine) {
       pick.verified = true; pick.fake = false; pick.unsureN = 0;
     } else {
       pick.verified = false;
@@ -403,7 +434,6 @@ export class BlurCamera {
       this.views = { tiles, turned };
       this.viewsFor = W + 'x' + H;
       this.slotIndex = 0;
-    this.searchTurned = true;   // 寝ている人など、横倒し・逆さの顔も探すか
     }
     const { tiles, turned } = this.views;
     // まっすぐの拡大と、回転とを1コマおきに。横倒しの顔を追っている間は、その顔を見つけた見方を優先する
@@ -526,6 +556,7 @@ export class BlurCamera {
           best.kp = b.kp; best.kpAt = now;
           best.s = sameRot ? Math.max(b.s, best.s - 0.02) : b.s;   // 同じ向きの中では、最近の高い点数を覚えておく
           best.rot = b.rot || 0; best.view = b.view || null; best.rotAt = now;
+          if (b.s >= 0.6 && !best.fake && !best.clear && this.gray) this._learnLook(best, this.gray, this.gw, this.gh, this.gk, best);
         }
         if (best.fake) {
           // はっきり顔らしい検出が来たら、すぐぼかしに戻す。
@@ -553,6 +584,7 @@ export class BlurCamera {
           if (s0 < BIRTH_OK) { nt.fake = true; nt.probation = BIRTH_RETRIES; nt.nextV = now + VERIFY_EVERY_MS; }
           if (this.onBirth) this.onBirth({ s: b.s, s0, rot: nt.rot, cx: Math.round(b.x + b.w / 2), cy: Math.round(b.y + b.h / 2), w: Math.round(b.w) });
         }
+        if (!nt.fake && this.gray) this._learnLook(nt, this.gray, this.gw, this.gh, this.gk, nt);
         this.tracks.push(nt);
       }
     }
@@ -560,11 +592,206 @@ export class BlurCamera {
     const W = this.out.width, H = this.out.height;
     this.tracks = this.tracks.filter((t) => {
       if (t.clear) return now - t.seen < HOLD_CLEAR_MS;
+      const cx = t.x + t.w / 2, cy = t.y + t.h / 2;
+      if (cx < -t.w * 0.3 || cy < -t.h * 0.3 || cx > W + t.w * 0.3 || cy > H + t.h * 0.3) return false;   // 画面の外へ出た
       const m = t.w * 0.25;
       const atEdge = t.x < m || t.y < m || t.x + t.w > W - m || t.y + t.h > H - m;
-      if (!t.verified) return now - t.seen < HOLD_UNSURE_MS;
-      return now - t.seen < (atEdge ? HOLD_EDGE_MS : HOLD_BLUR_MS);
+      // 見た目で追いかけられている顔は、検出が途切れていても残す（マスクの横顔などは検出が途切れやすい）
+      const followed = t.followAt && now - t.followAt < 200 && now - Math.max(t.seen, t.yAt || 0) < FOLLOW_MAX_MS;
+      if (!t.verified) return followed || now - t.seen < HOLD_UNSURE_MS;
+      return followed || now - t.seen < (atEdge ? HOLD_EDGE_MS : HOLD_BLUR_MS);
     });
+  }
+
+  // ---- 見た目の追いかけ ----
+  // 毎コマ、映像を小さな白黒の画面にする（追いかけ用。録画はされない）
+  _grayUpdate(W, H) {
+    const gw = GRAY_W, gh = Math.max(2, Math.round(GRAY_W * H / W));
+    const c = this.grayCanvas;
+    if (c.width !== gw || c.height !== gh) { c.width = gw; c.height = gh; }
+    this.gctx.drawImage(this.raw, 0, 0, W, H, 0, 0, gw, gh);
+    const d = this.gctx.getImageData(0, 0, gw, gh).data;
+    if (!this.gray || this.gray.length !== gw * gh) this.gray = new Float32Array(gw * gh);
+    const g = this.gray;
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114;
+    this.gw = gw; this.gh = gh; this.gk = gw / W;
+  }
+
+  // 顔の見た目（白黒の点の並び）を覚える。box は元の画面の座標
+  _makeTemplate(gray, gw, gh, gk, box) {
+    const bw = box.w * gk, bh = box.h * gk;
+    if (bw < 4 || bh < 4) return null;
+    const nx = Math.min(16, Math.max(4, Math.round(bw))), ny = Math.min(16, Math.max(4, Math.round(bh)));
+    const n = nx * ny, offs = new Int32Array(n), v = new Float32Array(n);
+    const x0 = Math.round(box.x * gk), y0 = Math.round(box.y * gk);
+    let k = 0;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      offs[k++] = Math.round((j + 0.5) * bh / ny) * gw + Math.round((i + 0.5) * bw / nx);
+    }
+    const iw = Math.ceil(bw) + 1, ih = Math.ceil(bh) + 1;
+    if (x0 < 0 || y0 < 0 || x0 + iw >= gw || y0 + ih >= gh) return null;   // 画面の端にかかる顔は覚えない
+    let sum = 0;
+    for (k = 0; k < n; k++) { v[k] = gray[y0 * gw + x0 + offs[k]]; sum += v[k]; }
+    const mean = sum / n;
+    let ss = 0;
+    for (k = 0; k < n; k++) { v[k] -= mean; ss += v[k] * v[k]; }
+    if (ss / n < 9) return null;   // 模様がほとんど無い（白い壁など）は追えない
+    return { v, offs, n, iw, ih, norm: Math.sqrt(ss), bw: box.w, bh: box.h };
+  }
+
+  // 覚えた見た目を、(cx,cy) の周り（元の画面の座標、半径 R）で探す。見つかった中心と似ている度合いを返す
+  _matchTemplate(tpl, gray, gw, gh, gk, cx, cy, R) {
+    const r = Math.max(2, Math.round(R * gk));
+    const pcx = Math.round(cx * gk - tpl.iw / 2), pcy = Math.round(cy * gk - tpl.ih / 2);
+    const xmin = Math.max(0, pcx - r), xmax = Math.min(gw - tpl.iw - 1, pcx + r);
+    const ymin = Math.max(0, pcy - r), ymax = Math.min(gh - tpl.ih - 1, pcy + r);
+    if (xmin > xmax || ymin > ymax) return null;
+    const { v, offs, n, norm } = tpl;
+    const score = (px, py) => {
+      const base = py * gw + px;
+      let s = 0, s2 = 0, st = 0;
+      for (let k = 0; k < n; k++) { const a = gray[base + offs[k]]; s += a; s2 += a * a; st += a * v[k]; }
+      const vv = s2 - s * s / n;
+      return vv < n * 4 ? -1 : st / (norm * Math.sqrt(vv));
+    };
+    let best = -2, bx = pcx, by = pcy;
+    for (let py = ymin; py <= ymax; py += 2) for (let px = xmin; px <= xmax; px += 2) {
+      const s = score(px, py);
+      if (s > best) { best = s; bx = px; by = py; }
+    }
+    // 細かく合わせる
+    const cx0 = bx, cy0 = by;
+    for (let py = cy0 - 1; py <= cy0 + 1; py++) for (let px = cx0 - 1; px <= cx0 + 1; px++) {
+      if (px < xmin || px > xmax || py < ymin || py > ymax || (px === cx0 && py === cy0)) continue;
+      const s = score(px, py);
+      if (s > best) { best = s; bx = px; by = py; }
+    }
+    return { cx: (bx + tpl.iw / 2) / gk, cy: (by + tpl.ih / 2) / gk, ncc: best };
+  }
+
+  // 検出が来なかったコマでも、覚えた見た目を探して、ぼかしの位置を動かす
+  _follow(now) {
+    if (!this.gray) return;
+    for (const t of this.tracks) {
+      if (t.clear || t.fake || !t.verified || !t.tpl || t.upAt === now) continue;
+      const p = this._predict(t, now);
+      const R = Math.max(t.w * 0.6, 24);
+      const m = this._matchTemplate(t.tpl, this.gray, this.gw, this.gh, this.gk, p.cx, p.cy, R);
+      if (!m || m.ncc < NCC_OK) continue;
+      const dt = now - t.upAt;
+      if (t.rsrc === 'ncc' && dt > 0 && dt < 400) {
+        t.vx = t.vx * 0.6 + ((m.cx - t.rcx) / dt) * 0.4;
+        t.vy = t.vy * 0.6 + ((m.cy - t.rcy) / dt) * 0.4;
+      }
+      t.rcx = m.cx; t.rcy = m.cy; t.rsrc = 'ncc'; t.upAt = now;
+      t.x = m.cx - t.w / 2; t.y = m.cy - t.h / 2;
+      t.followAt = now;
+    }
+  }
+
+  // 検出で位置が確かな顔は、そのときの見た目を覚え直す
+  _learnLook(t, gray, gw, gh, gk, box) {
+    const tpl = this._makeTemplate(gray, gw, gh, gk, box);
+    if (tpl) t.tpl = tpl;
+  }
+
+  // ---- もう1つの顔検出（YuNet） ----
+  // 1回に1つの向きで、別の流れで調べる。結果が返ってくるまでの間に動いた分は、見た目の追いかけで補正する
+  // 追っている顔があれば、「画面全体を調べる回」と「顔の周りを4区画で一度に調べる回」を交互に行う。
+  // 顔の周りは拡大して調べるので、横顔・マスクの顔でも点数が出やすく、向きを変えて何通りも試せる
+  _scheduleYunet(now, W, H) {
+    if (!this.yunet || this.yBusy || !this.gray) return;
+    const targets = this.tracks
+      .filter((t) => !t.clear && (!t.fake || t.probation > 0) && now - Math.max(t.seen, t.followAt || 0) < 1500)
+      .sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0))
+      .slice(0, 4);
+    let cells, kind;
+    if (targets.length && this.yIdx++ % 2 === 1) {
+      kind = 'roi';
+      const rots = this.searchTurned ? [0, 315, 45, 90, 270] : [0, 330, 30];
+      const plan = targets.map((t) => ({ t, rot: rots.includes(t.yRot) ? t.yRot : 0 }));
+      // 空いた区画には、同じ顔を別の向きでもう一度入れる
+      for (let i = 0; plan.length < 4 && i < 8; i++) {
+        const t = targets[i % targets.length];
+        const r = rots.find((x) => !plan.some((p) => p.t === t && p.rot === x));
+        if (r !== undefined) plan.push({ t, rot: r });
+      }
+      cells = plan.map(({ t, rot }, i) => {
+        const p = this._predict(t, now);
+        return { cx: p.cx, cy: p.cy, side: Math.max(t.w, t.h) * 2.4, rot, ox: (i % 2) * 320, oy: (i >> 1) * 320, size: 320, track: t };
+      });
+    } else {
+      kind = 'full';
+      const order = this.searchTurned ? [0, 315, 0, 45, 0, 90, 0, 270] : [0];
+      cells = [YuNetDetector.fullCell(W, H, order[(this.yFull = (this.yFull || 0) + 1) % order.length])];
+    }
+    this.yBusy = true;
+    const job = { at: now, kind, cells, gray: this.gray.slice(), gw: this.gw, gh: this.gh, gk: this.gk, W, H };
+    this.yunet.detect(this.raw, cells.map(({ track, ...c }) => c))
+      .then((boxes) => { if (this.running) this.yQueue.push({ job, boxes }); })
+      .catch(() => {})
+      .finally(() => { this.yBusy = false; });
+  }
+
+  // YuNetが顔と判断した枠で、追っている顔を確かめ、位置を合わせる
+  _yConfirm(t, b, ok, job, tpl, now) {
+    t.yAt = now;
+    if (t.clear) return;
+    if (!t.yRotS || b.s >= t.yRotS - 0.05 || now - t.yRotAt > 1500) { t.yRot = b.rot; t.yRotS = b.s; t.yRotAt = now; }
+    if (!ok) return;
+    t.yOkAt = now;
+    t.fake = false; t.verified = true; t.probation = 0; t.unsureN = 0; t.lowN = 0;
+    // 調べている間に、もっと新しい検出で位置が更新されていなければ、位置と大きさも合わせる
+    if ((t.upAt || 0) <= job.at || t.rsrc === 'ncc') {
+      const a = 0.7;
+      t.w += (b.w - t.w) * 0.5; t.h += (b.h - t.h) * 0.5;
+      t.x += (b.x + b.w / 2 - t.w / 2 - t.x) * a; t.y += (b.y + b.h / 2 - t.h / 2 - t.y) * a;
+    }
+    this._learnLook(t, this.gray, this.gw, this.gh, this.gk, t);
+    t.seen = now;
+    t.kp = yunetKp(b.kp); t.kpAt = now;
+  }
+
+  _applyYunet(now, W, H) {
+    if (!this.yQueue.length) return;
+    for (const { job, boxes } of this.yQueue.splice(0)) {
+      if (job.W !== W || job.H !== H || job.gw !== this.gw) continue;
+      for (const b0 of boxes) {
+        if (b0.s < Y_HINT || b0.w < 8 || b0.w > W * 1.3) continue;
+        // 調べた時の見た目を覚え、いまの画面で探し直して、動いた分だけずらす
+        const tpl = this._makeTemplate(job.gray, job.gw, job.gh, job.gk, b0);
+        let dx = 0, dy = 0;
+        if (tpl) {
+          const m = this._matchTemplate(tpl, this.gray, this.gw, this.gh, this.gk, b0.x + b0.w / 2, b0.y + b0.h / 2, Math.max(b0.w * 0.8, 40));
+          if (m && m.ncc >= NCC_OK) { dx = m.cx - (b0.x + b0.w / 2); dy = m.cy - (b0.y + b0.h / 2); }
+        }
+        const b = { x: b0.x + dx, y: b0.y + dy, w: b0.w, h: b0.h, s: b0.s, rot: b0.rot, kp: b0.kp.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
+        if (job.kind === 'roi') {
+          // 顔の周りを調べた回：その区画の真ん中あたりで見つかった顔だけを、その顔の手がかりにする
+          const c = job.cells[b0.cell], t = c && c.track;
+          if (!t || !this.tracks.includes(t)) continue;
+          const d = Math.hypot(b0.x + b0.w / 2 - c.cx, b0.y + b0.h / 2 - c.cy);
+          if (d > c.side * 0.3 || b0.w < c.side * 0.12 || b0.w > c.side * 0.9) continue;
+          // まだ顔と確かめられていない枠は、基準を上げる（拡大するとライトなどもそれらしく見えることがあるため）
+          this._yConfirm(t, b, b0.s >= (t.verified ? Y_OK : Y_OK_TURNED), job, tpl, now);
+          continue;
+        }
+        const ok = b0.s >= (b0.rot ? Y_OK_TURNED : Y_OK);
+        let best = null, bestScore = 0;
+        for (const t of this.tracks) {
+          const s = overlapScore(t, b);
+          if (s > bestScore) { bestScore = s; best = t; }
+        }
+        if (best && bestScore > 0.15) {
+          this._yConfirm(best, b, ok, job, tpl, now);
+        } else if (ok && !this.tracks.some((t) => coverage(t, b) > 0.3)) {
+          const nt = { id: this.nextId++, x: b.x, y: b.y, w: b.w, h: b.h, seen: now, clear: false, vx: 0, vy: 0, upAt: now, rcx: b.x + b.w / 2, rcy: b.y + b.h / 2, rsrc: 'y', fullAt: 0, rot: b.rot, view: null, altIdx: 0, s: b.s, rotAt: now, kp: yunetKp(b.kp), kpAt: now, person: null, nextId: 0, hits: 0, misses: 0, noAuto: false, verified: true, fake: false, vAvg: 0, vN: 0, strong: false, nextV: now + VERIFY_EVERY_MS, yAt: now, yOkAt: now, yRot: b.rot, yRotS: b.s, yRotAt: now, fakeBox: null };
+          this._learnLook(nt, this.gray, this.gw, this.gh, this.gk, nt);
+          this.tracks.push(nt);
+          if (this.onBirth) this.onBirth({ s: b.s, s0: b.s, rot: b.rot, cx: Math.round(b.x + b.w / 2), cy: Math.round(b.y + b.h / 2), w: Math.round(b.w), y: true });
+        }
+      }
+    }
   }
 
   _region(t, W, H) {
@@ -735,6 +962,12 @@ export class BlurCamera {
       if (this.onToggle) this.onToggle(hit.clear);
     }
   }
+}
+
+// YuNetの顔の点（右目・左目・鼻・口の右端・口の左端）を、顔の見分けで使う並び（右目・左目・鼻・口）にする
+function yunetKp(p) {
+  if (!p || p.length < 5) return [];
+  return [p[0], p[1], p[2], { x: (p[3].x + p[4].x) / 2, y: (p[3].y + p[4].y) / 2 }];
 }
 
 function nearest(person, desc) {
