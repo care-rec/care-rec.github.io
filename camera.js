@@ -25,6 +25,7 @@ const VERIFY_MIN_SAMPLES = 3;
 const GONE_SCORE = 0.3;        // 調べ直しの点数がこれ未満＝顔らしさがまったく無い
 const GONE_TIMES = 3;          // それがこの回数続いたら、「ずっと顔として扱う」保護も外して、ぼかしを消す（顔が去ったあとの背景に残るぼかし対策）
 const BIRTH_OK = 0.5;         // 新しい枠をその場で調べた点数がこれ未満なら、最初からぼかさない
+const BIRTH_OK_Y = 0.6;       // もう1つの顔検出が動いているときの基準（マスクの顔はそちらで見つかるので、ここは厳しくする）
 const BIRTH_RETRIES = 5;      // ぼかさなかった枠を、短い間隔で調べ直す回数
 // 回転させた向き（横倒し・逆さ）では基準を上げる。実測：寝ている顔は 0.75〜0.89（中央0.82）、
 // ライトは回転させると 0.72 を超えることがあるが 0.8 には届かない
@@ -35,14 +36,27 @@ const VERIFY_EVERY_MS = 150; // 判断がつくまでの調べ直しの間隔
 const VERIFY_KEEP_MS = 500;  // 判断がついたあとも調べ続ける間隔
 const MOVE_DIFF = 18;         // 縮小画面の明るさの変化（1点あたりの平均）がこれ以上なら「カメラを動かしている」
 const MOVE_KEEP_MS = 600;     // 動きが止まってからも、この時間は「動かしている」扱いにする
-const PROV_MS = 700;          // 仮にぼかした枠は、この時間内にもう1つの検出が顔と確かめなければ外す
-const PROV_MIN = 0.45;        // カメラを動かしている間は、この点数以上の候補を、調べる前に仮にぼかす
+const PROV_MS = 450;          // 仮にぼかした枠は、この時間内にもう1つの検出が顔と確かめなければ外す
+const PROV_MAX_W = 0.4;       // 仮にぼかす候補の大きさの上限（画面の幅に対する割合）
+const PROV_MIN = 0.55;        // カメラを動かしている間は、この点数以上の候補を、調べる前に仮にぼかす
 const STRONG_SCORE = 0.75;   // 「顔ではない」とした枠でも、検出の点数がこれ以上になったらすぐぼかしに戻す
 const FAKE_ZONE_MS = 8000;   // 「顔ではない」と分かった場所を覚えておく時間。同じ場所に出た枠は、ぼかす前に調べる
 // もう1つの顔検出（YuNet）。マスク＋横顔・寝ている顔に強い。別の流れで、向きを変えながらくり返し探す
 const Y_OK = 0.6;             // まっすぐの向きでこの点数以上なら「顔」
 const Y_OK_TURNED = 0.7;      // 回転させた向きでは基準を上げる（ライトなどが通りにくいように）
 const Y_AGREE = 0.55;          // もう1つの検出（BlazeFace）も同じ場所に反応しているときは、この点数で「顔」とする
+const Y_SURE = 0.8;            // これ以上なら1回で「顔」とする。これ未満は、同じ場所で2回反応してはじめて「顔」とする
+const Y_SURE_UP = 0.72;        // まっすぐの向きでの同じ基準
+const Y_TWICE_MS = 800;        // 2回目の反応を待つ時間
+const Y_FIRM = 0.75;           // 一度でもこの点数が出た枠は、本物の顔らしいので長めに追いかける
+const FOLLOW_WEAK_MS = 1200;   // 点数の低い枠を、見た目だけで追いかける最大時間
+const HOLD_WEAK_MS = 500;      // 点数の低い枠を、見失ったあと残す時間
+const HOLD_SWING_MS = 300;     // カメラを動かしている間に見失った枠を残す時間（位置が合わなくなるので長く残さない）
+const Y_PROP = 0.5;            // 画面全体の検査でこの点数以上なら「候補」として、その場所を拡大して調べ直す
+const Y_PROP_OK = 0.7;         // 拡大して調べ直したときの合格点
+const Y_PROP_OK_UP = 0.62;     // まっすぐの向きでの合格点
+const Y_PROP_LIFE_MS = 600;    // 候補を調べ直すまでの期限
+const Y_PROP_NG_MS = 1000;     // 調べ直して顔でなかった場所は、この時間は候補にしない
 const Y_HINT = 0.45;          // これ以上なら「顔がまだそこにある」手がかりとして扱う
 const Y_RECENT_MS = 3000;     // YuNetが顔と判断してからこの時間は、ほかの調べ直しで「顔ではない」にしない
 const Y_GONE_MS = 2000;       // 「顔がもう無い」と判断するには、この時間YuNetの手がかりも無いこと
@@ -50,6 +64,24 @@ const Y_GONE_MS = 2000;       // 「顔がもう無い」と判断するには�
 const GRAY_W = 160;           // 追いかけに使う縮小画面の幅
 const NCC_OK = 0.5;           // 見た目の似ている度合い（-1〜1）がこれ以上なら、同じ顔とみなして追う
 const FOLLOW_MAX_MS = 3000;   // 検出がなくても、見た目の追いかけだけでぼかしを続ける最大時間
+// 処理量の調整（本体が熱くならないように）。カメラを振っている間だけ全力で探し、落ち着いているときは回数を減らす
+const BF_EVERY_CALM = 2;      // 落ち着いているときは、もとの顔検出を何コマに1回行うか
+const BF_EXTRA_EVERY = 4;     // 画面の一部を拡大して探す検出を、何コマに1回行うか
+const VERIFY_EVERY_FRAMES = 3; // 顔かどうかの調べ直しを、何コマに1回行うか
+const GM_RANGE = 7;           // カメラの動きを探す範囲（粗い画面の点の数。1点は元の画面の18ピクセルほど）
+const GM_MIN_TEXTURE = 1.5;   // 映像の模様がこれより少ないときは、動きを測らない
+const GM_MAX_RATIO = 0.8;     // いちばん合う位置が、平均よりこの割合以下でないときは、動きを測らない
+const Y_IDLE_GAP_MS = 150;    // 顔がまだ見つかっていないときの休み時間（短めにして、早く見つける）
+const Y_NEW_VIEW = 0.12;      // 前回の検査からカメラがこの割合（画面の幅に対して）動いたら、新しい景色として休まず調べる
+const Y_CALM_GAP_MS = 250;    // 落ち着いているときの、もう1つの顔検出の休み時間
+const Y_CALM_DUTY = 3;        // 休み時間は、1回の検出にかかった時間のこの倍以上とる（遅い端末ほど長く休む）
+const Y_HOT_MS = 1200;         // カメラの動きが止まってから、全力で探し続ける時間
+const Y_START_HOT_MS = 1500;  // カメラを開いた直後に全力で探す時間
+const Y_TWIN_MAX_MS = 4000;   // 2つ同時に動かすのは、続けてこの時間まで（振り続けても発熱しすぎないように）
+// 映像を少し遅らせて画面に出す。検出は最新のコマで行うので、顔を見つけたら、まだ出していないコマにさかのぼってぼかせる
+const OUT_DELAY_MS = 450;     // 遅らせる時間
+const OUT_MAX_FRAMES = 18;    // ためておくコマ数の上限
+const BACK_GROW = 1.12;       // さかのぼってぼかすときは、位置の誤差を見込んで少し広げる
 const BLUR_STEPS = [2, 3, 4]; // にじませる幅（顔の範囲を72に縮めた画面での幅）。大きいほど強いぼかし
 const BLUR_HAZE = 0.12;       // 白っぽさ（0〜1）
 
@@ -94,6 +126,9 @@ export class BlurCamera {
     this.vctx2 = this.vCanvas.getContext('2d', { alpha: false });
     this.onStatus = onStatus || (() => {});
     this.yunet = null;          // もう1つの顔検出（読み込めたときだけ使う）
+    this.delayQ = [];           // 遅らせて出すコマの列（メモリの中だけ。録画はされない）
+    this.framePool = [];        // 使い回す画面
+    this.shown = null;          // いま画面に出ているコマの情報
     this.yunet2 = null;         // 2つ目（同時に動かして、見つけるまでの時間を縮める）
     this.yBusy = false;
     this.yBusy2 = false;
@@ -142,6 +177,8 @@ export class BlurCamera {
   async start() {
     await this._openCamera();
     this.running = true;
+    this._watchFrames();
+    this.yStartAt = 0;
     requestAnimationFrame(this._loop);
     try {
       await this.initDetector();
@@ -167,6 +204,20 @@ export class BlurCamera {
     ]);
   }
 
+  // カメラから新しいコマが届いたことを知る（同じ絵を何度も調べないため）
+  _watchFrames() {
+    const v = this.video;
+    if (!v.requestVideoFrameCallback) return;
+    const id = (this.frameWatch = (this.frameWatch || 0) + 1);
+    const cb = () => {
+      if (id !== this.frameWatch || !this.running) return;
+      this.newFrame = true;
+      this.frameSeenAt = performance.now();
+      v.requestVideoFrameCallback(cb);
+    };
+    v.requestVideoFrameCallback(cb);
+  }
+
   async _openCamera() {
     this._closeCamera();
     this.stream = await navigator.mediaDevices.getUserMedia({
@@ -175,6 +226,7 @@ export class BlurCamera {
     });
     this.video.srcObject = this.stream;
     await this.video.play();
+    this._flushDelay();
     this.tracks = [];
   }
 
@@ -193,6 +245,9 @@ export class BlurCamera {
   stop() {
     this.running = false;
     this._closeCamera();
+    this._flushDelay();
+    for (const c of this.framePool) { c.canvas.width = 0; c.canvas.height = 0; }
+    this.framePool = [];
     this.tracks = [];
     this.persons = [];
   }
@@ -208,9 +263,17 @@ export class BlurCamera {
     const vw = v.videoWidth, vh = v.videoHeight;
     if (!vw || !vh || v.readyState < 2) return;
 
+    // カメラのコマは毎秒30枚。画面の更新（毎秒60回）のたびに処理すると、同じ絵を2回調べることになる
+    const tick = performance.now();
+    const watching = tick - (this.frameSeenAt || -1e9) < 500;
+    if (watching ? !this.newFrame : tick - (this.lastProc || -1e9) < 30) return;
+    this.newFrame = false;
+    this.lastProc = tick;
+
     // 録画中でなければ、カメラの向きに合わせて画面サイズを決める
     if (!this.locked && (this.out.width !== vw || this.out.height !== vh)) {
       for (const c of [this.out, this.raw, this.overlay]) { c.width = vw; c.height = vh; }
+      this._flushDelay();
       this.tracks = [];
       this.yQueue = [];
     }
@@ -238,6 +301,7 @@ export class BlurCamera {
         this._updateTracks(this._detect(W, H, now), now);
         this._applyYunet(now, W, H);
         this._follow(now, W, H);
+        this._mergeTracks(now);
         this._verify(now);
         detected = true;
         this._identify(now);
@@ -247,24 +311,9 @@ export class BlurCamera {
       }
     }
 
-    // 3) 録画される画面へ描く
-    if (!detected) {
-      // 検出できない間は全体をぼかす
-      this._blurAll(W, H);
-    } else {
-      this.octx.drawImage(this.raw, 0, 0);
-      for (const t of this.tracks) {
-        if (t.clear || t.fake) continue;
-        try {
-          this._blurFace(t, W, H);
-        } catch (e) {
-          // ぼかしの描画に失敗したときは、その範囲を塗りつぶして顔が見えないようにする
-          const r = this._region(t, W, H);
-          if (r.w > 0 && r.h > 0) { this.octx.fillStyle = '#888'; this.octx.fillRect(r.x, r.y, r.w, r.h); }
-        }
-      }
-    }
-    this._drawLabel(W, H);
+    // 3) いまのコマをためて、少し前のコマを録画される画面へ描く
+    this._pushFrame(W, H, now, detected);
+    this._drawDelayed(W, H, now);
 
     // 4) 目印（録画されない）
     this._drawOverlay(W, H);
@@ -276,6 +325,7 @@ export class BlurCamera {
   _moving(now) { return now - (this.movedAt || -1e9) < MOVE_KEEP_MS; }
 
   _verify(now) {
+    if (this.yunet && this.frameNo % VERIFY_EVERY_FRAMES) return;
     let pick = null;
     for (const t of this.tracks) {
       if (t.clear || t.seen !== now || now < t.nextV) continue;
@@ -286,7 +336,7 @@ export class BlurCamera {
     if (!pick) return;
     let usedRot = pick.rot || 0;
     let score = this._cropScore(pick, usedRot, now);
-    if (score < VERIFY_OK && !pick.strong && this.searchTurned) {
+    if (score < VERIFY_OK && !pick.strong && this.searchTurned && !this.yunet) {
       // まっすぐで顔と確かめられないときは、別の向き（横倒し・逆さ）でも1つずつ試す
       const alts = [0, 90, 270, 180].filter((r) => r !== (pick.rot || 0));
       const alt = alts[pick.altIdx++ % alts.length];
@@ -434,6 +484,12 @@ export class BlurCamera {
 
   _detect(W, H, now) {
     const boxes = [];
+    // もう1つの顔検出が動いているときは、もとの顔検出の回数を減らす。
+    // カメラを振っている間と、確かめている途中の枠があるときは、毎コマ調べる
+    const yReady = !!this.yunet;
+    const fno = (this.frameNo = (this.frameNo || 0) + 1);
+    const urgent = this._moving(now) || this.tracks.some((t) => !t.fake && !t.clear && !t.verified);
+    if (yReady && !urgent && fno % BF_EVERY_CALM) return boxes;
     const full = this.detector.detectForVideo(this.raw, this._ts(now));
     for (const d of full.detections) {
       const b = d.boundingBox;
@@ -461,10 +517,30 @@ export class BlurCamera {
     // まっすぐの拡大と、回転とを1コマおきに。横倒しの顔を追っている間は、その顔を見つけた見方を優先する
     this.slotIndex++;
     const lying = this.tracks.find((t) => t.view && !t.fake && now - t.seen < 1500);
-    let view;
-    if (this.slotIndex % 2 === 0 || !this.searchTurned) view = tiles[(this.searchTurned ? this.slotIndex >> 1 : this.slotIndex) % tiles.length];
+    let view = null;
+    if (yReady) {
+      // 回転して探す役目は、もう1つの顔検出が受け持つ。ここでは遠くの小さな顔だけを、ときどき拡大して探す
+      if (fno % BF_EXTRA_EVERY === 0) view = tiles[this.slotIndex % tiles.length];
+    } else if (this.slotIndex % 2 === 0 || !this.searchTurned) view = tiles[(this.searchTurned ? this.slotIndex >> 1 : this.slotIndex) % tiles.length];
     else view = turned[(this.slotIndex >> 1) % turned.length];
+    if (view) this._detectView(view, boxes);
+    // 追跡：画面全体の検出で毎コマ追えていない顔（寝ている顔・遠くの小さい顔）は、
+    // その顔の周りだけを切り出して毎コマ調べ、位置を更新する（カメラが動いてもぼかしが遅れないように）
+    let roi = 0;
+    for (const t of this.tracks) {
+      if (roi >= (yReady ? 1 : 3)) break;
+      if (t.fake || now - t.seen > 1000 || now - (t.fullAt || 0) < 150) continue;
+      if (yReady && now - (t.followAt || -1e9) < 100) continue;   // 見た目の追いかけで位置が分かっている顔は調べない
+      roi++;
+      const b = this._roiDetect(t, now);
+      if (b) boxes.push(b);
+    }
+    return boxes;
+  }
 
+  // 画面の一部を拡大したり、回転したりして検出する
+  _detectView(view, boxes) {
+    const now = this.nowTs;
     const { rot, tx, ty, q } = view;
     const vw = view.tw, vh = view.th;
     const cw = Math.round((rot === 90 || rot === 270 ? vh : vw) * q), ch = Math.round((rot === 90 || rot === 270 ? vw : vh) * q);
@@ -491,17 +567,6 @@ export class BlurCamera {
       const p1 = back(b.originX, b.originY), p2 = back(b.originX + b.width, b.originY + b.height);
       boxes.push({ x: Math.min(p1.x, p2.x), y: Math.min(p1.y, p2.y), w: Math.abs(p2.x - p1.x), h: Math.abs(p2.y - p1.y), rot, view: rot ? view : null, s: d.categories?.[0]?.score ?? 0, kp: (d.keypoints || []).map((k) => back(k.x * cw, k.y * ch)) });
     }
-    // 追跡：画面全体の検出で毎コマ追えていない顔（寝ている顔・遠くの小さい顔）は、
-    // その顔の周りだけを切り出して毎コマ調べ、位置を更新する（カメラが動いてもぼかしが遅れないように）
-    let roi = 0;
-    for (const t of this.tracks) {
-      if (roi >= 3) break;
-      if (t.fake || now - t.seen > 1000 || now - (t.fullAt || 0) < 150) continue;
-      roi++;
-      const b = this._roiDetect(t, now);
-      if (b) boxes.push(b);
-    }
-    return boxes;
   }
 
   // 顔の周りを、顔の向きに合わせて切り出して検出し、元の画面の座標に直した枠を返す
@@ -587,7 +652,7 @@ export class BlurCamera {
           const fb = best.fakeBox;
           const moved = !fb || Math.hypot(b.x + b.w / 2 - fb.cx, b.y + b.h / 2 - fb.cy) > fb.w * 0.3 || Math.abs(b.w - fb.w) > fb.w * 0.3;
           if (b.s >= STRONG_SCORE) { best.fake = false; best.vN = 0; best.vAvg = 0; best.nextV = 0; }
-          else if (moved && b.s >= PROV_MIN && this._moving(now) && b.w <= this.out.width * 0.5) { best.fake = false; best.vN = 0; best.vAvg = 0; best.nextV = 0; best.unsureN = 0; best.provAt = now; }
+          else if (moved && b.s >= PROV_MIN && this._moving(now) && b.w <= this.out.width * PROV_MAX_W) { best.fake = false; best.vN = 0; best.vAvg = 0; best.nextV = 0; best.unsureN = 0; best.provAt = now; }
           else if (moved) { best.nextV = 0; best.fakeBox = { cx: b.x + b.w / 2, cy: b.y + b.h / 2, w: b.w }; this._rememberFake(best, now); }
         }
       } else if (!this.tracks.some((t) => !t.fake && t.seen === now && coverage(t, b) > 0.3)) {
@@ -598,7 +663,8 @@ export class BlurCamera {
         // （人がいない場面で、物にぼかしが一瞬出るのを防ぐ）。ぼかさなかった枠も、しばらくは短い間隔で調べ続ける
         if (!nt.fake && b.s < STRONG_SCORE) {
           let s0 = this._cropScore(nt, nt.rot, now);
-          if (s0 < BIRTH_OK && this.searchTurned) {
+          const birthLine = this.yunet ? BIRTH_OK_Y : BIRTH_OK;
+          if (s0 < birthLine && this.searchTurned && !this.yunet) {
             for (const r of [0, 90, 270, 180]) {
               if (r === nt.rot) continue;
               s0 = Math.max(s0, this._cropScore(nt, r, now));
@@ -607,9 +673,9 @@ export class BlurCamera {
           }
           // カメラを動かしている間は、顔が画面に入ってきた直後のことが多いので、調べがつくまで仮にぼかしておく
           // （マスクの寝顔などは、ここでは顔らしい点数が出ない。もう1つの検出が確かめるまでの間、素顔が映らないように）
-          const prov = s0 < BIRTH_OK && this._moving(now) && b.s >= PROV_MIN && b.w <= this.out.width * 0.5;
+          const prov = s0 < birthLine && this._moving(now) && b.s >= PROV_MIN && b.w <= this.out.width * PROV_MAX_W;
           if (prov) nt.provAt = now;
-          else if (s0 < BIRTH_OK) { nt.fake = true; nt.probation = BIRTH_RETRIES; nt.nextV = now + VERIFY_EVERY_MS; }
+          else if (s0 < birthLine) { nt.fake = true; nt.probation = BIRTH_RETRIES; nt.nextV = now + VERIFY_EVERY_MS; }
           if (this.onBirth) this.onBirth({ s: b.s, s0, rot: nt.rot, cx: Math.round(b.x + b.w / 2), cy: Math.round(b.y + b.h / 2), w: Math.round(b.w) });
         }
         if (!nt.fake && this.gray) this._learnLook(nt, this.gray, this.gw, this.gh, this.gk, nt);
@@ -632,10 +698,37 @@ export class BlurCamera {
       const m = t.w * 0.25;
       const atEdge = t.x < m || t.y < m || t.x + t.w > W - m || t.y + t.h > H - m;
       // 見た目で追いかけられている顔は、検出が途切れていても残す（マスクの横顔などは検出が途切れやすい）
-      const followed = t.followAt && now - t.followAt < 200 && now - Math.max(t.seen, t.yAt || 0) < FOLLOW_MAX_MS;
-      if (!t.verified) return followed || now - t.seen < HOLD_UNSURE_MS;
-      return followed || now - t.seen < (atEdge ? HOLD_EDGE_MS : HOLD_BLUR_MS);
+      const firmFace = t.strong || (t.yBest || 0) >= Y_FIRM;
+      const followed = t.followAt && now - t.followAt < 200 && now - Math.max(t.seen, t.yAt || 0) < (firmFace ? FOLLOW_MAX_MS : FOLLOW_WEAK_MS);
+      if (followed) return true;
+      // 点数の低い枠は、カメラを動かしている間に見失ったらすぐ消す
+      if (!firmFace && this._moving(now)) return now - t.seen < HOLD_SWING_MS;
+      if (!t.verified) return now - t.seen < HOLD_UNSURE_MS;
+      if (!firmFace) return now - t.seen < HOLD_WEAK_MS;
+      return now - t.seen < (atEdge ? HOLD_EDGE_MS : HOLD_BLUR_MS);
     });
+  }
+
+  // ---- 同じ顔に重なった枠を1つにまとめる ----
+  // 2つの検出が別々に枠を作ると、同じ顔にぼかしの枠が二重・三重にかかり、タップもしにくくなる
+  _mergeTracks(now) {
+    const rank = (t) => (t.clear ? 5 : t.fake ? 0 : now - (t.yOkAt || -1e9) < Y_RECENT_MS ? 4 : t.strong ? 3 : t.verified ? 2 : 1);
+    for (let again = true; again;) {
+      again = false;
+      for (let i = 0; i < this.tracks.length && !again; i++) {
+        for (let j = i + 1; j < this.tracks.length && !again; j++) {
+          const a = this.tracks[i], b = this.tracks[j];
+          if (!sameFace(a, b)) continue;
+          const ra = rank(a), rb = rank(b);
+          // 同じ確かさなら、小さいほう（顔にぴったり合っている枠）を残す
+          const keep = ra > rb || (ra === rb && a.w <= b.w) ? a : b, drop = keep === a ? b : a;
+          absorbTrack(keep, drop);
+          drop.mergedInto = keep;
+          this.tracks.splice(this.tracks.indexOf(drop), 1);
+          again = true;
+        }
+      }
+    }
   }
 
   // ---- 見た目の追いかけ ----
@@ -646,18 +739,87 @@ export class BlurCamera {
     if (c.width !== gw || c.height !== gh) { c.width = gw; c.height = gh; }
     this.gctx.drawImage(this.raw, 0, 0, W, H, 0, 0, gw, gh);
     const d = this.gctx.getImageData(0, 0, gw, gh).data;
-    if (!this.gray || this.gray.length !== gw * gh) this.gray = new Float32Array(gw * gh);
-    const g = this.gray;
+    if (!this.gray || this.gray.length !== gw * gh) {
+      this.gray = new Float32Array(gw * gh);
+      this.grayPrev = null;
+    }
+    // 1つ前のコマを取っておく（カメラの動きを測るため）
+    const prev = this.grayPrev && this.grayPrev.length === this.gray.length ? this.grayPrev : new Float32Array(gw * gh);
+    const hadPrev = !!this.grayPrev && this.grayPrev.length === this.gray.length && this.grayReady;
+    this.grayPrev = this.gray;
+    this.gray = prev;
+    const g = this.gray, p = this.grayPrev;
     let diff = 0;
     for (let i = 0, j = 0; i < g.length; i++, j += 4) {
       const v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114;
-      diff += Math.abs(v - g[i]);
+      diff += Math.abs(v - p[i]);
       g[i] = v;
     }
+    this.grayReady = true;
     // カメラを動かしているかどうか（画面全体の明るさの変化で判断する）
     this.moveDiff = diff / g.length;
     if (this.moveDiff >= MOVE_DIFF) this.movedAt = this.nowTs;
     this.gw = gw; this.gh = gh; this.gk = gw / W;
+    if (hadPrev) this._shiftWithCamera(this._cameraShift(p, g, gw, gh), gw / W);
+  }
+
+  // 1つ前のコマからいまのコマまでに、映像全体がどれだけずれたかを測る（縮小画面の点の数で返す）。
+  // まず粗い画面で大まかに探し、次に細かい画面で合わせる。模様が少なく判断できないときは null
+  _cameraShift(prev, cur, gw, gh) {
+    const S = 4, cw = gw >> 2, ch = gh >> 2, n = cw * ch;
+    if (!this.gmA || this.gmA.length !== n) { this.gmA = new Float32Array(n); this.gmB = new Float32Array(n); }
+    const A = this.gmA, B = this.gmB;
+    for (let y = 0, k = 0; y < ch; y++) for (let x = 0; x < cw; x++, k++) {
+      let a = 0, b = 0;
+      for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
+        const q = (y * S + j) * gw + x * S + i;
+        a += prev[q]; b += cur[q];
+      }
+      A[k] = a / 16; B[k] = b / 16;
+    }
+    const R = GM_RANGE;
+    let best = Infinity, bx = 0, by = 0, sum = 0, cnt = 0;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      let e = 0, m = 0;
+      for (let y = R; y < ch - R; y += 2) for (let x = R; x < cw - R; x += 2) {
+        e += Math.abs(A[y * cw + x] - B[(y + dy) * cw + x + dx]);
+        m++;
+      }
+      e /= m; sum += e; cnt++;
+      if (e < best) { best = e; bx = dx; by = dy; }
+    }
+    const mean = sum / cnt;
+    if (mean < GM_MIN_TEXTURE || best > mean * GM_MAX_RATIO) return null;   // 白い壁など、ずれを測れない場面
+    // 細かい画面で合わせる
+    let fine = Infinity, fx = bx * S, fy = by * S;
+    const M = R * S + S;
+    for (let dy = by * S - 3; dy <= by * S + 3; dy++) for (let dx = bx * S - 3; dx <= bx * S + 3; dx++) {
+      let e = 0, m = 0;
+      for (let y = M; y < gh - M; y += 5) for (let x = M; x < gw - M; x += 5) {
+        e += Math.abs(prev[y * gw + x] - cur[(y + dy) * gw + x + dx]);
+        m++;
+      }
+      e /= m;
+      if (e < fine) { fine = e; fx = dx; fy = dy; }
+    }
+    return { dx: fx, dy: fy };
+  }
+
+  // カメラが動いた分だけ、すべての枠を映像と一緒に動かす。これで、見失った顔にもぼかしが付いていく
+  _shiftWithCamera(m, gk) {
+    if (!m || (!m.dx && !m.dy)) return;
+    const dx = m.dx / gk, dy = m.dy / gk;
+    this.camX = (this.camX || 0) + dx;
+    this.camY = (this.camY || 0) + dy;
+    for (const t of this.tracks) {
+      t.x += dx; t.y += dy;
+      if (t.rcx !== undefined) { t.rcx += dx; t.rcy += dy; }
+      if (t.fakeBox) { t.fakeBox.cx += dx; t.fakeBox.cy += dy; }
+    }
+    for (const z of this.fakeZones) { z.cx += dx; z.cy += dy; }
+    for (const c of this.ySoft || []) { c.cx += dx; c.cy += dy; }
+    for (const c of this.yProps || []) { c.cx += dx; c.cy += dy; }
+    for (const c of this.yRejects || []) { c.cx += dx; c.cy += dy; }
   }
 
   // 顔の見た目（白黒の点の並び）を覚える。box は元の画面の座標
@@ -743,10 +905,22 @@ export class BlurCamera {
   // 追っている顔があれば、「画面全体を調べる回」と「顔の周りを4区画で一度に調べる回」を交互に行う。
   // 顔の周りは拡大して調べるので、横顔・マスクの顔でも点数が出やすく、向きを変えて何通りも試せる
   // 2つ目が読み込めていれば、2つを同時に動かす（1つは画面全体の見張り専用）。新しく入ってきた顔を早く見つけるため
+  // カメラを振っている間（顔が画面に入ってくる瞬間）だけ全力で探し、落ち着いているときは休みながら調べる
   _scheduleYunet(now, W, H) {
-    if (!this.gray) return;
-    if (this.yunet && !this.yBusy) this._runYunet(this.yunet, 'yBusy', now, W, H, this.yunet2 ? 'full' : 'any');
-    if (this.yunet2 && !this.yBusy2) this._runYunet(this.yunet2, 'yBusy2', now, W, H, 'any');
+    if (!this.gray || !this.yunet) return;
+    if (!this.yStartAt) this.yStartAt = now;
+    const swinging = now - (this.movedAt || -1e9) < Y_HOT_MS;
+    const starting = now - this.yStartAt < Y_START_HOT_MS;
+    const waiting = now < (this.yAgainUntil || 0) || (this.yProps || []).length > 0 || this.tracks.some((t) => !t.fake && !t.clear && !t.verified);   // 顔かどうか確かめている途中の枠がある
+    const newView = Math.hypot((this.camX || 0) - (this.scanX || 0), (this.camY || 0) - (this.scanY || 0)) > W * Y_NEW_VIEW;   // 前回の検査のあと、新しい景色が入った
+    const noFace = !this.tracks.some((t) => !t.fake && t.verified);
+    if (swinging) { if (!this.twinFrom) this.twinFrom = now; } else this.twinFrom = 0;
+    const twin = !!this.yunet2 && swinging && now - this.twinFrom < Y_TWIN_MAX_MS;
+    const rest = Math.max(noFace ? Y_IDLE_GAP_MS : Y_CALM_GAP_MS, (this.yMs || 0) * Y_CALM_DUTY);
+    if (!this.yBusy && (swinging || starting || waiting || newView || now - (this.yEndAt || -1e9) >= rest)) {
+      this._runYunet(this.yunet, 'yBusy', now, W, H, twin ? 'full' : 'any');
+    }
+    if (twin && !this.yBusy2) this._runYunet(this.yunet2, 'yBusy2', now, W, H, 'any');
   }
 
   _runYunet(det, busyKey, now, W, H, mode) {
@@ -761,7 +935,16 @@ export class BlurCamera {
     // 顔の周りを調べるのは、新しい部品でまだ確かめていない枠があるときと、確かめた顔でも少し時間がたったときだけ。
     // それ以外は画面全体を調べる回を増やし、新しく画面に入ってきた顔を早く見つける
     const needRoi = targets.some((t) => now - (t.yOkAt || -1e9) > (t.verified && !t.fake ? 400 : 0));
-    if (mode !== 'full' && targets.length && needRoi && this.yIdx++ % 2 === 1) {
+    const props = mode === 'full' ? [] : this._takeProps(now);
+    const unsure = targets.some((t) => !t.verified && !t.fake);
+    if (props.length) {
+      // 候補の場所を拡大して調べ直す。候補の向きと、その前後の向きで試す
+      kind = 'roi';
+      const plan = [];
+      const per = props.length === 1 ? [0, -45, 45, 90] : [0, 45];
+      for (const p of props) for (const d of per) plan.push({ p, rot: (p.rot + d + 360) % 360 });
+      cells = plan.slice(0, 4).map(({ p, rot }, i) => ({ cx: p.cx, cy: p.cy, side: Math.max(p.w, p.h) * 2.4, rot, ox: (i % 2) * 320, oy: (i >> 1) * 320, size: 320, prop: p }));
+    } else if (mode !== 'full' && targets.length && needRoi && (unsure || this.yIdx++ % 2 === 1)) {
       kind = 'roi';
       const rots = this.searchTurned ? [90, 270, 0, 315, 45] : [0, 330, 30];
       // 区画を顔の数で分け、それぞれの顔を「いちばん反応した向き」と「まだ試していない向き」で調べる
@@ -784,26 +967,68 @@ export class BlurCamera {
     } else {
       kind = 'full';
       const n = (this.yFull = (this.yFull || 0) + 1);
-      if (this.searchTurned && n % 3 !== 0) {
+      this.scanX = this.camX || 0; this.scanY = this.camY || 0;
+      if (this.searchTurned && n % 4 !== 0) {
         // 画面全体を4つの向き（まっすぐ・右倒し・左倒し・斜め）で同時に調べる。寝ている顔を1回で見つけるため
         const diag = [315, 45, 225, 135][n % 4];
         cells = [0, 90, 270, diag].map((rot, i) => ({ ...YuNetDetector.fullCell(W, H, rot), ox: (i % 2) * 320, oy: (i >> 1) * 320, size: 320 }));
       } else {
-        // 3回に1回は、まっすぐの向きだけを大きく調べる（遠くの小さな顔のため）
+        // 4回に1回は、まっすぐの向きだけを大きく調べる（遠くの小さな顔のため）
         cells = [YuNetDetector.fullCell(W, H, 0)];
       }
     }
     this[busyKey] = true;
-    const job = { at: now, kind, cells, gray: this.gray.slice(), gw: this.gw, gh: this.gh, gk: this.gk, W, H };
-    det.detect(this.raw, cells.map(({ track, ...c }) => c))
+    const job = { at: now, kind, cells, gray: this.gray.slice(), gw: this.gw, gh: this.gh, gk: this.gk, W, H, camX: this.camX || 0, camY: this.camY || 0 };
+    const began = performance.now();
+    det.detect(this.raw, cells.map(({ track, prop, ...c }) => c))
       .then((boxes) => { if (this.running) this.yQueue.push({ job, boxes }); })
       .catch(() => {})
-      .finally(() => { this[busyKey] = false; });
+      .finally(() => {
+        this[busyKey] = false;
+        this.yEndAt = performance.now();
+        this.yMs = this.yMs ? this.yMs * 0.8 + (this.yEndAt - began) * 0.2 : this.yEndAt - began;
+      });
+  }
+
+  // 画面全体の検査で見つけた候補を覚える（あとで拡大して調べ直す）
+  _propose(b, now) {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    this.yProps = this.yProps || [];
+    this.yRejects = (this.yRejects || []).filter((r) => now - r.at < Y_PROP_NG_MS);
+    const near = (c) => Math.hypot(c.cx - cx, c.cy - cy) < Math.max(c.w, b.w) * 0.6;
+    if (this.yProps.some(near) || this.yRejects.some(near)) return;
+    this.yProps.push({ cx, cy, w: b.w, h: b.h, rot: b.rot, s: b.s, at: now, hit: false });
+  }
+
+  // 調べ直す候補を、点数の高い順に2つまで取り出す
+  _takeProps(now) {
+    this.yProps = (this.yProps || []).filter((p) => now - p.at < Y_PROP_LIFE_MS);
+    this.yProps.sort((a, b) => b.s - a.s);
+    return this.yProps.splice(0, 2);
+  }
+
+  // もう1つの顔検出で見つけた顔の、新しい枠を作る
+  _birthY(b, firm, now) {
+    const nt = { id: this.nextId++, x: b.x, y: b.y, w: b.w, h: b.h, seen: now, clear: false, vx: 0, vy: 0, upAt: now, rcx: b.x + b.w / 2, rcy: b.y + b.h / 2, rsrc: 'y', fullAt: 0, rot: b.rot, view: null, altIdx: 0, s: b.s, rotAt: now, kp: yunetKp(b.kp), kpAt: now, person: null, nextId: 0, hits: 0, misses: 0, noAuto: false, verified: firm, provAt: firm ? 0 : now, fake: false, vAvg: 0, vN: 0, strong: false, nextV: now + VERIFY_EVERY_MS, yBest: b.s, yAt: now, yOkAt: firm ? now : 0, yRot: b.rot, yRotS: b.s, yRotAt: now, fakeBox: null };
+    this._learnLook(nt, this.gray, this.gw, this.gh, this.gk, nt);
+    this.tracks.push(nt);
+    if (this.onBirth) this.onBirth({ s: b.s, s0: b.s, rot: b.rot, cx: Math.round(b.x + b.w / 2), cy: Math.round(b.y + b.h / 2), w: Math.round(b.w), y: true });
+  }
+
+  // 同じ場所で少し前にも反応していれば true。1回きりの反応（ライトや模様のまぐれ）をふるい落とす
+  _yTwice(b, now) {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    this.ySoft = (this.ySoft || []).filter((c) => now - c.at < Y_TWICE_MS);
+    const hit = this.ySoft.some((c) => c.at < now && Math.hypot(c.cx - cx, c.cy - cy) < Math.max(c.w, b.w) * 0.6);
+    this.ySoft.push({ cx, cy, w: b.w, at: now });
+    this.yAgainUntil = now + 400;
+    return hit;
   }
 
   // YuNetが顔と判断した枠で、追っている顔を確かめ、位置を合わせる
   _yConfirm(t, b, ok, job, tpl, now) {
     t.yAt = now;
+    t.yBest = Math.max(t.yBest || 0, b.s);
     if (t.clear) return;
     if (!t.yRotS || b.s >= t.yRotS - 0.05 || now - t.yRotAt > 1500) { t.yRot = b.rot; t.yRotS = b.s; t.yRotAt = now; }
     if (!ok) return;
@@ -812,7 +1037,10 @@ export class BlurCamera {
     // 調べている間に、もっと新しい検出で位置が更新されていなければ、位置と大きさも合わせる
     if ((t.upAt || 0) <= job.at || t.rsrc === 'ncc') {
       const a = 0.7;
-      t.w += (b.w - t.w) * 0.5; t.h += (b.h - t.h) * 0.5;
+      // 斜めの向きで見つけた枠は外側を囲む大きさなので、今の大きさより広げない
+      const diag = b.rot % 90 !== 0;
+      const bw = diag ? Math.min(b.w, t.w) : b.w, bh = diag ? Math.min(b.h, t.h) : b.h;
+      t.w += (bw - t.w) * 0.5; t.h += (bh - t.h) * 0.5;
       t.x += (b.x + b.w / 2 - t.w / 2 - t.x) * a; t.y += (b.y + b.h / 2 - t.h / 2 - t.y) * a;
     }
     this._learnLook(t, this.gray, this.gw, this.gh, this.gk, t);
@@ -824,28 +1052,48 @@ export class BlurCamera {
     if (!this.yQueue.length) return;
     for (const { job, boxes } of this.yQueue.splice(0)) {
       if (job.W !== W || job.H !== H || job.gw !== this.gw) continue;
+      const asked = new Set(job.cells.map((c) => c.prop).filter(Boolean));
       for (const b0 of boxes) {
         if (b0.s < Y_HINT || b0.w < 8 || b0.w > W * 1.3) continue;
         // 調べた時の見た目を覚え、いまの画面で探し直して、動いた分だけずらす
         const tpl = this._makeTemplate(job.gray, job.gw, job.gh, job.gk, b0);
-        let dx = 0, dy = 0;
+        // 調べている間にカメラが動いた分をまず足し、そのあと見た目で細かく合わせる
+        const camDx = (this.camX || 0) - job.camX, camDy = (this.camY || 0) - job.camY;
+        let dx = camDx, dy = camDy;
         if (tpl) {
-          const m = this._matchTemplate(tpl, this.gray, this.gw, this.gh, this.gk, b0.x + b0.w / 2, b0.y + b0.h / 2, Math.max(b0.w * 0.8, 40));
+          const m = this._matchTemplate(tpl, this.gray, this.gw, this.gh, this.gk, b0.x + b0.w / 2 + camDx, b0.y + b0.h / 2 + camDy, Math.max(b0.w * 0.5, 30));
           if (m && m.ncc >= NCC_OK) { dx = m.cx - (b0.x + b0.w / 2); dy = m.cy - (b0.y + b0.h / 2); }
         }
         const b = { x: b0.x + dx, y: b0.y + dy, w: b0.w, h: b0.h, s: b0.s, rot: b0.rot, kp: b0.kp.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
         if (job.kind === 'roi') {
           // 顔の周りを調べた回：その区画の真ん中あたりで見つかった顔だけを、その顔の手がかりにする
           const c = job.cells[b0.cell], t = c && c.track;
+          if (c && c.prop) {
+            const d0 = Math.hypot(b0.x + b0.w / 2 - c.cx, b0.y + b0.h / 2 - c.cy);
+            if (d0 > c.side * 0.3 || b0.w < c.side * 0.12 || b0.w > c.side * 0.9) continue;
+            if (b0.s < (b0.rot ? Y_PROP_OK : Y_PROP_OK_UP) || c.prop.hit) continue;
+            c.prop.hit = true;
+            const same = this.tracks.find((o) => coverage(o, b) > 0.3);
+            if (same) this._yConfirm(same, b, true, job, tpl, now); else this._birthY(b, true, now);
+            continue;
+          }
           if (!t || !this.tracks.includes(t)) continue;
           const d = Math.hypot(b0.x + b0.w / 2 - c.cx, b0.y + b0.h / 2 - c.cy);
           if (d > c.side * 0.3 || b0.w < c.side * 0.12 || b0.w > c.side * 0.9) continue;
           // まだ顔と確かめられていない枠は、基準を上げる（拡大するとライトなどもそれらしく見えることがあるため）
+          const known = t.verified && !t.fake;
           const agree = now - (t.dAt || -1e9) < 300 && b0.s >= Y_AGREE + 0.05;
-          this._yConfirm(t, b, agree || b0.s >= (t.verified ? Y_OK : Y_OK_TURNED), job, tpl, now);
+          const firm = b0.s >= (known ? Y_OK : Y_OK_TURNED);
+          // まだ顔と確かめられていない枠は、高い点数か、もとの顔検出も反応している場所を拡大して合格点が出たとき、
+          // または続けて反応したときだけ「顔」とする
+          const both = firm && now - (t.dAt || -1e9) < 300;
+          const pass = known ? firm || agree : b0.s >= Y_SURE || both || ((firm || agree) && this._yTwice(b, now));
+          if (pass && !firm) t.weakAt = now; else if (firm) t.weakAt = 0;
+          this._yConfirm(t, b, pass, job, tpl, now);
           continue;
         }
-        const ok = b0.s >= (b0.rot ? Y_OK_TURNED : Y_OK);
+        const line = b0.s >= (b0.rot ? Y_OK_TURNED : Y_OK);
+        const sure = b0.s >= (b0.rot ? Y_SURE : Y_SURE_UP);
         let best = null, bestScore = 0;
         for (const t of this.tracks) {
           const s = overlapScore(t, b);
@@ -853,19 +1101,24 @@ export class BlurCamera {
         }
         if (best && bestScore > 0.15) {
           // 2つの検出が同じ場所に反応していれば、点数が少し低くても顔とする（動いてぶれた寝顔など）
+          const known = best.verified && !best.fake;
           const agree = bestScore > 0.3 && now - (best.dAt || -1e9) < 300 && b0.s >= Y_AGREE;
-          this._yConfirm(best, b, ok || agree, job, tpl, now);
-        } else if (ok && !this.tracks.some((t) => coverage(t, b) > 0.3)) {
-          const nt = { id: this.nextId++, x: b.x, y: b.y, w: b.w, h: b.h, seen: now, clear: false, vx: 0, vy: 0, upAt: now, rcx: b.x + b.w / 2, rcy: b.y + b.h / 2, rsrc: 'y', fullAt: 0, rot: b.rot, view: null, altIdx: 0, s: b.s, rotAt: now, kp: yunetKp(b.kp), kpAt: now, person: null, nextId: 0, hits: 0, misses: 0, noAuto: false, verified: true, fake: false, vAvg: 0, vN: 0, strong: false, nextV: now + VERIFY_EVERY_MS, yAt: now, yOkAt: now, yRot: b.rot, yRotS: b.s, yRotAt: now, fakeBox: null };
-          this._learnLook(nt, this.gray, this.gw, this.gh, this.gk, nt);
-          this.tracks.push(nt);
-          if (this.onBirth) this.onBirth({ s: b.s, s0: b.s, rot: b.rot, cx: Math.round(b.x + b.w / 2), cy: Math.round(b.y + b.h / 2), w: Math.round(b.w), y: true });
+          const pass = known ? line || agree : sure || ((line || agree) && this._yTwice(b, now));
+          if (pass && !line) best.weakAt = now; else if (line) best.weakAt = 0;
+          this._yConfirm(best, b, pass, job, tpl, now);
+        } else if (!this.tracks.some((t) => coverage(t, b) > 0.3)) {
+          if (sure) { this._birthY(b, true, now); continue; }
+          // カメラを振った直後に合格点の反応があれば、確かめる間も仮にぼかしておく
+          if (line && now - (this.movedAt || -1e9) < Y_HOT_MS) this._birthY(b, this._yTwice(b, now), now);
+          else if (b0.s >= Y_PROP) this._propose(b, now);
         }
       }
+      for (const p of asked) if (!p.hit) (this.yRejects = this.yRejects || []).push({ cx: p.cx, cy: p.cy, w: p.w, at: now });
     }
   }
 
-  _region(t, W, H) {
+  // ぼかす範囲（画面の外にはみ出したまま）
+  _regionRaw(t) {
     const side = t.rot === 90 || t.rot === 270;   // 横倒しの顔
     const p = this._predict(t, this.nowTs || 0);
     const cx = p.cx, cy = p.cy - (t.rot ? 0 : t.h * 0.08);
@@ -873,18 +1126,93 @@ export class BlurCamera {
     const speed = Math.hypot(t.vx || 0, t.vy || 0);
     const extra = speed < 0.15 ? 0 : Math.min(speed * 90, t.w * 0.5);   // ゆっくりのときは広げない
     const w = t.w * (side ? EXPAND_H : EXPAND_W) + extra, h = t.h * (side ? EXPAND_W : EXPAND_H) + extra;
-    let x = cx - w / 2, y = cy - h / 2;
-    const x0 = Math.max(0, Math.floor(x)), y0 = Math.max(0, Math.floor(y));
-    const x1 = Math.min(W, Math.ceil(x + w)), y1 = Math.min(H, Math.ceil(y + h));
-    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    return { x: cx - w / 2, y: cy - h / 2, w, h };
+  }
+
+  _region(t, W, H) { return clampRect(this._regionRaw(t), W, H); }
+
+  // ---- 映像を少し遅らせて出す ----
+  // いまのコマと、その時点の枠の位置をためる。新しく見つかった顔は、ためてあるコマにもさかのぼって印を付ける
+  _pushFrame(W, H, now, detected) {
+    const q = this.delayQ, cam = { x: this.camX || 0, y: this.camY || 0 };
+    const marks = [];
+    for (const t of this.tracks) {
+      if (t.verified && !t.fake) t.everOk = true;
+      const r = this._regionRaw(t);
+      marks.push({ t, r });
+      if (t.backDone) continue;
+      t.backDone = true;
+      for (const e of q) {
+        // カメラが動いた分だけ位置を戻す
+        const w = r.w * BACK_GROW, h = r.h * BACK_GROW;
+        e.marks.push({ t, r: { x: r.x + (e.cam.x - cam.x) - (w - r.w) / 2, y: r.y + (e.cam.y - cam.y) - (h - r.h) / 2, w, h } });
+      }
+    }
+    let f = this.framePool.pop();
+    if (!f) {
+      const canvas = document.createElement('canvas');
+      f = { canvas, ctx: canvas.getContext('2d', { alpha: false }) };
+    }
+    if (f.canvas.width !== W || f.canvas.height !== H) { f.canvas.width = W; f.canvas.height = H; }
+    f.ctx.drawImage(this.raw, 0, 0);
+    q.push({ f, at: now, cam, marks, blurAll: !detected, W, H });
+    while (q.length > OUT_MAX_FRAMES) this.framePool.push(q.shift().f);
+  }
+
+  // 遅らせた時間がたったコマを、ぼかしてから録画される画面へ描く
+  _drawDelayed(W, H, now) {
+    const q = this.delayQ;
+    let e = null;
+    while (q.length && now - q[0].at >= OUT_DELAY_MS) {
+      if (e) this.framePool.push(e.f);
+      e = q.shift();
+    }
+    if (!e) {
+      // 最初のコマがたまるまでは、画面全体をぼかしておく
+      if (!this.shown) { this._blurAll(W, H, this.raw); this._drawLabel(W, H); }
+      return;
+    }
+    const list = [];
+    if (e.blurAll || e.W !== W || e.H !== H) {
+      this._blurAll(W, H, e.f.canvas);
+    } else {
+      this.octx.drawImage(e.f.canvas, 0, 0);
+      const done = new Set();
+      for (const m of e.marks) {
+        let t = m.t;
+        while (t.mergedInto) t = t.mergedInto;
+        if (done.has(t) || t.fake) continue;
+        // 消えた枠のうち、一度も顔と確かめられなかったものは、ぼかさない
+        if (!t.everOk && !t.clear && !this.tracks.includes(t)) continue;
+        done.add(t);
+        const r = clampRect(m.r, W, H);
+        if (r.w < 2 || r.h < 2) continue;
+        list.push({ t, r });
+        if (t.clear) continue;
+        try {
+          this._blurFace(r, e.f.canvas);
+        } catch (err) {
+          // ぼかしの描画に失敗したときは、その範囲を塗りつぶして顔が見えないようにする
+          this.octx.fillStyle = '#888';
+          this.octx.fillRect(r.x, r.y, r.w, r.h);
+        }
+      }
+    }
+    this._drawLabel(W, H);
+    this.shown = { at: e.at, marks: list };
+    this.framePool.push(e.f);
+  }
+
+  _flushDelay() {
+    for (const e of this.delayQ) this.framePool.push(e.f);
+    this.delayQ = [];
+    this.shown = null;
   }
 
   // すりガラスのような、なめらかなぼかし。
   // 手順：顔の範囲を段階的に小さくして細部を消す → 少し大きくして、ずらし重ねでならす
   //       → ふちをやわらかく消す → 元の大きさに戻して重ねる
-  _blurFace(t, W, H) {
-    const r = this._region(t, W, H);
-    if (r.w < 2 || r.h < 2) return;
+  _blurFace(r, src) {
     const ratio = r.h / r.w;
     const size = (c, w) => {
       const h = Math.max(2, Math.round(w * ratio));
@@ -895,7 +1223,7 @@ export class BlurCamera {
     const MW = 72;
     const ph = size(this.pre, MW * 2);
     this.pctx.imageSmoothingEnabled = true;
-    this.pctx.drawImage(this.raw, r.x, r.y, r.w, r.h, 0, 0, this.pre.width, ph);
+    this.pctx.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, this.pre.width, ph);
     const mh = size(this.midA, MW); size(this.midB, MW);
     const a = this.actx, b = this.bctx;
     a.imageSmoothingEnabled = true;
@@ -944,10 +1272,10 @@ export class BlurCamera {
     return this._maskGrad;
   }
 
-  _blurAll(W, H) {
+  _blurAll(W, H, src) {
     const sw = 16, sh = Math.max(2, Math.round(16 * H / W));
     if (this.small.width !== sw || this.small.height !== sh) { this.small.width = sw; this.small.height = sh; }
-    this.sctx.drawImage(this.raw, 0, 0, W, H, 0, 0, sw, sh);
+    this.sctx.drawImage(src, 0, 0, W, H, 0, 0, sw, sh);
     this.octx.imageSmoothingEnabled = true;
     this.octx.drawImage(this.small, 0, 0, sw, sh, 0, 0, W, H);
   }
@@ -973,10 +1301,7 @@ export class BlurCamera {
     const c = this.vctx;
     c.clearRect(0, 0, W, H);
     const lw = Math.max(3, Math.round(Math.min(W, H) * 0.006));
-    for (const t of this.tracks) {
-      if (t.fake) continue;
-      const r = this._region(t, W, H);
-      if (r.w < 2 || r.h < 2) continue;   // 画面の外にはみ出した枠
+    for (const { t, r } of this.shown ? this.shown.marks : []) {
       c.lineWidth = lw;
       if (t.clear) {
         c.strokeStyle = '#34d399';
@@ -1008,12 +1333,19 @@ export class BlurCamera {
     const offX = (rect.width - W * s) / 2, offY = (rect.height - H * s) / 2;
     const px = (e.clientX - rect.left - offX) / s;
     const py = (e.clientY - rect.top - offY) / s;
+    const shownMarks = this.shown ? this.shown.marks : [];
     let hit = null, hitArea = Infinity;
-    for (const t of this.tracks) {
-      if (t.fake) continue;
-      const r = this._region(t, W, H);
+    for (const { t, r } of shownMarks) {
       if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h && r.w * r.h < hitArea) {
         hit = t; hitArea = r.w * r.h;
+      }
+    }
+    if (!hit) {
+      // 枠のすぐ外を押したときは、いちばん近い枠を選ぶ
+      let best = Infinity;
+      for (const { t, r } of shownMarks) {
+        const d = Math.hypot((px - r.x - r.w / 2) / (r.w / 2), (py - r.y - r.h / 2) / (r.h / 2));
+        if (d < 1.35 && d < best) { best = d; hit = t; }
       }
     }
     if (hit) {
@@ -1033,6 +1365,38 @@ export class BlurCamera {
       }
       if (this.onToggle) this.onToggle(hit.clear);
     }
+  }
+}
+
+// 枠を画面の中に収める
+function clampRect(r, W, H) {
+  const x0 = Math.max(0, Math.floor(r.x)), y0 = Math.max(0, Math.floor(r.y));
+  const x1 = Math.min(W, Math.ceil(r.x + r.w)), y1 = Math.min(H, Math.ceil(r.y + r.h));
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+// 2つの枠が同じ顔を指しているか（小さいほうの大部分が重なり、中心も近い）
+function sameFace(a, b) {
+  const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y), x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
+  const ix = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+  if (ix <= 0) return false;
+  const small = Math.min(a.w * a.h, b.w * b.h);
+  const d = Math.hypot(a.x + a.w / 2 - b.x - b.w / 2, a.y + a.h / 2 - b.y - b.h / 2);
+  return ix / small > 0.45 && d < Math.max(a.w, b.w) * 0.6;
+}
+
+// drop の情報を keep に引き継ぐ
+function absorbTrack(keep, drop) {
+  for (const k of ['seen', 'yAt', 'yOkAt', 'dAt', 'followAt', 'fullAt']) keep[k] = Math.max(keep[k] || 0, drop[k] || 0);
+  keep.strong = keep.strong || drop.strong;
+  if (!drop.fake) keep.verified = keep.verified || drop.verified;
+  if (drop.kpAt > (keep.kpAt || 0)) { keep.kp = drop.kp; keep.kpAt = drop.kpAt; }
+  // 大きすぎる枠と、顔に合った枠が重なったときは、顔に合った大きさに近づける
+  if (!drop.fake && drop.w < keep.w * 0.85 && drop.w > keep.w * 0.5) {
+    const cx = (keep.x + keep.w / 2 + drop.x + drop.w / 2) / 2, cy = (keep.y + keep.h / 2 + drop.y + drop.h / 2) / 2;
+    keep.w = Math.min(keep.w, drop.w * 1.25); keep.h = Math.min(keep.h, drop.h * 1.25);
+    keep.x = cx - keep.w / 2; keep.y = cy - keep.h / 2;
+    keep.tpl = null;
   }
 }
 
