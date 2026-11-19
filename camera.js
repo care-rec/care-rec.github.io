@@ -80,7 +80,7 @@ const Y_HOT_MS = 1200;         // カメラの動きが止まってから、全�
 const Y_START_HOT_MS = 1500;  // カメラを開いた直後に全力で探す時間
 const Y_TWIN_MAX_MS = 4000;   // 2つ同時に動かすのは、続けてこの時間まで（振り続けても発熱しすぎないように）
 const EDGE_REACH = 0.5;       // ぼかしの端から画面の端までが、ぼかしの大きさのこの割合より近ければ、画面の端まで広げる
-const EDGE_HOLD_MS = 6000;    // 画面の端からはみ出しかけた顔を、その位置でぼかし続ける長さ（上限）
+const EDGE_HOLD_MS = 2000;    // 画面の端からはみ出しかけた顔を、最後に検出されてからその位置でぼかし続ける長さ（上限）
 const FLIP_COVER_MS = 1200;   // カメラを切り替えた直後、画面全体をぼかしておく時間
 // 姿勢から頭の位置を割り出す（遠くの小さな顔は、顔の検出では見つけにくい）
 const POSE_GAP_SWING_MS = 150; // カメラを振っている間の間隔
@@ -742,13 +742,15 @@ export class BlurCamera {
     this.tracks = this.tracks.filter((t) => {
       if (t.clear) return now - t.seen < HOLD_CLEAR_MS;
       const cx = t.x + t.w / 2, cy = t.y + t.h / 2;
-      if (cx < -t.w * 0.3 || cy < -t.h * 0.3 || cx > W + t.w * 0.3 || cy > H + t.h * 0.3) return false;   // 画面の外へ出た
+      // 画面の外へ出た。顔の中心が端を越えても、顔の一部はまだ映っていることがあるので、枠がほぼ全部出るまで残す
+      if (cx < -t.w * 0.45 || cy < -t.h * 0.45 || cx > W + t.w * 0.45 || cy > H + t.h * 0.45) return false;
       const m = t.w * 0.25;
       const atEdge = t.x < m || t.y < m || t.x + t.w > W - m || t.y + t.h > H - m;
       // 見た目で追いかけられている顔は、検出が途切れていても残す（マスクの横顔などは検出が途切れやすい）
       const firmFace = t.strong || (t.yBest || 0) >= Y_FIRM;
       const followed = (t.followAt && now - t.followAt < 200 && now - Math.max(t.seen, t.yAt || 0) < (firmFace ? FOLLOW_MAX_MS : FOLLOW_WEAK_MS))
-        || (t.verified && !t.fake && t.edgeAt && now - t.edgeAt < 200 && now - t.edgeFrom < EDGE_HOLD_MS);   // 画面の端からはみ出しかけている顔
+        // 画面の端からはみ出しかけている顔。最後に検出されてから EDGE_HOLD_MS までに限る（顔が去ったあと端にぼかしが残らないように）
+        || (t.verified && !t.fake && t.edgeAt && now - t.edgeAt < 200 && now - Math.max(t.seen, t.yAt || 0, t.poseAt || 0) < EDGE_HOLD_MS);
       if (followed || (!t.provAt && now - (t.poseAt || -1e9) < POSE_KEEP_MS)) return true;
       if (t.provAt && t.poseProv) return now - t.provAt < POSE_TWICE_MS;
       // 点数の低い枠は、カメラを動かしている間に見失ったらすぐ消す
@@ -756,8 +758,7 @@ export class BlurCamera {
       if (!t.verified) return now - t.seen < HOLD_UNSURE_MS;
       if (!firmFace) return now - t.seen < HOLD_WEAK_MS;
       return now - t.seen < (atEdge ? HOLD_EDGE_MS : HOLD_BLUR_MS);
-    });
-  }
+    });  }
 
   // ---- 同じ顔に重なった枠を1つにまとめる ----
   // 2つの検出が別々に枠を作ると、同じ顔にぼかしの枠が二重・三重にかかり、タップもしにくくなる
@@ -934,25 +935,29 @@ export class BlurCamera {
   _follow(now) {
     if (!this.gray) return;
     for (const t of this.tracks) {
-      if (t.clear || t.fake || !t.verified || !t.tpl || t.upAt === now) continue;
+      if (t.clear || t.fake || !t.verified || t.upAt === now) continue;
       const p = this._predict(t, now);
       const R = Math.max(t.w * 0.6, 24);
-      const m = this._matchTemplate(t.tpl, this.gray, this.gw, this.gh, this.gk, p.cx, p.cy, R);
-      // 画面の端にかかっている顔が、内側の別の場所へ大きく飛ぼうとしたら、それも「はみ出しかけ」とみなす
-      // （半分切れた顔は見た目が合わず、近くの似た模様〔服・ぬいぐるみなど〕へ移りやすい）
       const W = this.out.width, H = this.out.height, e = t.w * 0.15, j = t.w * 0.25;
       const nearEdge = p.cx + t.w / 2 > W - e || p.cx - t.w / 2 < e || p.cy + t.h / 2 > H - e || p.cy - t.h / 2 < e;
+      // 見た目を覚えていない顔（画面の端で見つかった顔など）は、見た目では追えない
+      const m = t.tpl ? this._matchTemplate(t.tpl, this.gray, this.gw, this.gh, this.gk, p.cx, p.cy, R) : null;
+      // 画面の端にかかっている顔が、内側の別の場所へ大きく飛ぼうとしたら、それも「はみ出しかけ」とみなす
+      // （半分切れた顔は見た目が合わず、近くの似た模様〔服・ぬいぐるみなど〕へ移りやすい）。
+      // 端ぎりぎりで探す範囲が画面の外になり、見た目を照らし合わせられないときも同じ
       const jumpIn = m && nearEdge && Math.hypot(m.cx - p.cx, m.cy - p.cy) > j;
-      if (m && (m.atEdge || jumpIn)) {
+      if ((m && (m.atEdge || jumpIn)) || (!m && nearEdge)) {
         // 顔が画面の端からはみ出しかけている。内側へは動かさず、いまの位置（はみ出した位置）でぼかし続ける。
         // 本当に画面の外へ出たときは、カメラの動きと一緒に枠も画面の外へ出ていく
-        if (!t.edgeFrom) t.edgeFrom = now;
-        if (now - t.edgeFrom < EDGE_HOLD_MS) { t.followAt = now; t.edgeAt = now; }
+        t.edgeAt = now;   // 残す長さは、見失った顔の整理（_updateTracks）で決める
         t.vx = (t.vx || 0) * 0.8; t.vy = (t.vy || 0) * 0.8;   // 見込みで外へ流れていかないように
+        // カメラの動きと一緒に外へ流れて「画面の外へ出た」と消されないよう、枠の4分の1は画面の中に残す
+        // （本当に去った顔は、最後の検出から EDGE_HOLD_MS で終わる）
+        t.x = Math.max(-t.w * 0.75, Math.min(W - t.w * 0.25, t.x));
+        t.y = Math.max(-t.h * 0.75, Math.min(H - t.h * 0.25, t.y));
         continue;
       }
-      t.edgeFrom = 0;
-      if (!m || m.ncc < NCC_OK) continue;
+      if (!m || m.ncc < NCC_OK) continue;   // 見た目を覚えていない顔も、ここで終わり（これまでどおり）
       const dt = now - t.upAt;
       if (t.rsrc === 'ncc' && dt > 0 && dt < 400) {
         t.vx = t.vx * 0.6 + ((m.cx - t.rcx) / dt) * 0.4;
