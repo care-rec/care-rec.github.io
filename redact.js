@@ -1,0 +1,357 @@
+// 確認画面の「手動ぼかし」。名札・ベッドネーム・自動で隠れなかった顔などを、指で囲んで隠す。
+// 囲みは動画の中の位置（映像の画素）で持ち、場面ごとの位置（keys）を覚える。
+// 2つの場面で位置がちがえば、その間はなめらかに動かす（人と一緒に動く名札に合わせるため）。
+// 書き出しは、元の動画を最初から再生しながら、囲みを描いた画面を録画し直す（動画の長さと同じだけ時間がかかる）。
+// 映像はこのスマホの中だけで処理し、どこにも送らない。
+import { pickMimeType } from './recorder.js';
+
+const MIN_SIDE = 16;          // これより小さい囲みは作らない（映像の画素）
+const HANDLE_CSS = 26;        // 大きさを変えるつまみの大きさ（画面上の点）
+const KEY_SNAP = 0.15;        // この秒数以内の場面の位置は、同じ場面として上書きする
+
+// ---- 囲みの位置 ----
+export function rectAt(m, t) {
+  if (t < m.from - 0.02 || t > m.to + 0.02) return null;
+  const k = m.keys;
+  if (t <= k[0].t) return k[0];
+  if (t >= k[k.length - 1].t) return k[k.length - 1];
+  for (let i = 1; i < k.length; i++) {
+    if (t <= k[i].t) {
+      const a = k[i - 1], b = k[i], f = (t - a.t) / Math.max(1e-6, b.t - a.t);
+      return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, w: a.w + (b.w - a.w) * f, h: a.h + (b.h - a.h) * f };
+    }
+  }
+  return k[k.length - 1];
+}
+
+function setKey(m, t, r) {
+  const i = m.keys.findIndex((k) => Math.abs(k.t - t) < KEY_SNAP);
+  const k = { t, x: r.x, y: r.y, w: r.w, h: r.h };
+  if (i >= 0) m.keys[i] = k; else m.keys.push(k);
+  m.keys.sort((a, b) => a.t - b.t);
+}
+
+// ---- 隠す描き方 ----
+// ぼかし：囲みをとても小さく縮めてから、なめらかに引き伸ばす（文字や顔の形が読めなくなる）
+const tiny = document.createElement('canvas');
+const tctx = tiny.getContext('2d');
+const mid = document.createElement('canvas');
+const mctx = mid.getContext('2d');
+export function hide(ctx, src, r, kind, W, H) {
+  const x = Math.max(0, Math.floor(r.x)), y = Math.max(0, Math.floor(r.y));
+  const w = Math.min(W, Math.ceil(r.x + r.w)) - x, h = Math.min(H, Math.ceil(r.y + r.h)) - y;
+  if (w < 2 || h < 2) return;
+  if (kind === 'black') { ctx.fillStyle = '#000'; ctx.fillRect(x, y, w, h); return; }
+  try {
+    const tw = Math.max(2, Math.min(10, Math.round(w / 14))), th = Math.max(2, Math.round(tw * h / w));
+    const mw = tw * 4, mh = th * 4;
+    if (mid.width !== mw || mid.height !== mh) { mid.width = mw; mid.height = mh; }
+    if (tiny.width !== tw || tiny.height !== th) { tiny.width = tw; tiny.height = th; }
+    mctx.imageSmoothingEnabled = true; mctx.imageSmoothingQuality = 'high';
+    mctx.drawImage(src, x, y, w, h, 0, 0, mw, mh);
+    tctx.imageSmoothingEnabled = true; tctx.imageSmoothingQuality = 'high';
+    tctx.drawImage(mid, 0, 0, mw, mh, 0, 0, tw, th);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(tiny, 0, 0, tw, th, x, y, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+  } catch (e) {
+    ctx.fillStyle = '#888'; ctx.fillRect(x, y, w, h);
+  }
+}
+
+// ---- 囲みを作る・動かす画面 ----
+export class RedactEditor {
+  constructor({ video, canvas, onChange }) {
+    this.video = video;
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.onChange = onChange || (() => {});
+    this.masks = [];
+    this.sel = null;
+    this.nextId = 1;
+    this.active = false;
+    this.drag = null;
+    this.duration = 0;
+    canvas.addEventListener('pointerdown', (e) => this._down(e));
+    canvas.addEventListener('pointermove', (e) => this._move(e));
+    for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, (e) => this._up(e));
+    const redraw = () => { if (this.active) this.draw(); };
+    for (const ev of ['seeked', 'loadeddata', 'pause']) video.addEventListener(ev, redraw);
+  }
+
+  get time() { return this.video.currentTime || 0; }
+
+  open(duration) {
+    this.duration = duration;
+    this.active = true;
+    this._watch();
+    this.draw();
+  }
+
+  close() { this.active = false; }
+
+  reset() { this.masks = []; this.sel = null; this.nextId = 1; }
+
+  // 再生中は、コマごとに描き直す
+  _watch() {
+    const v = this.video;
+    const step = () => {
+      if (!this.active) return;
+      if (!v.paused) this.draw();
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(step); else requestAnimationFrame(step);
+    };
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(step); else requestAnimationFrame(step);
+  }
+
+  draw() {
+    const v = this.video, c = this.canvas;
+    const W = v.videoWidth, H = v.videoHeight;
+    if (!W || !H) return;
+    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    const g = this.ctx;
+    try { g.drawImage(v, 0, 0, W, H); } catch (e) { return; }
+    const t = this.time;
+    for (const m of this.masks) {
+      const r = this._liveRect(m, t);
+      if (r) hide(g, v, r, m.kind, W, H);
+    }
+    // 目印（書き出しには入らない）
+    const s = this._scale();
+    g.save();
+    for (const m of this.masks) {
+      const r = this._liveRect(m, t);
+      if (!r) continue;
+      const on = m === this.sel;
+      g.lineWidth = (on ? 3 : 2) / s;
+      g.setLineDash(on ? [] : [8 / s, 6 / s]);
+      g.strokeStyle = 'rgba(0,0,0,.6)'; g.strokeRect(r.x, r.y, r.w, r.h);
+      g.lineWidth = (on ? 2 : 1.5) / s;
+      g.strokeStyle = on ? '#ffd400' : '#fff'; g.strokeRect(r.x, r.y, r.w, r.h);
+      g.setLineDash([]);
+      // 番号
+      g.font = `bold ${Math.round(15 / s)}px sans-serif`;
+      g.fillStyle = on ? '#ffd400' : '#fff';
+      g.strokeStyle = '#000'; g.lineWidth = 3 / s;
+      g.strokeText(String(m.no), r.x + 5 / s, r.y + 18 / s); g.fillText(String(m.no), r.x + 5 / s, r.y + 18 / s);
+      if (on) {
+        const hr = HANDLE_CSS / 2 / s;
+        g.beginPath(); g.arc(r.x + r.w, r.y + r.h, hr, 0, Math.PI * 2);
+        g.fillStyle = '#ffd400'; g.fill(); g.lineWidth = 2 / s; g.strokeStyle = '#000'; g.stroke();
+      }
+    }
+    if (this.drag && this.drag.mode === 'new') {
+      const r = this.drag.rect;
+      g.setLineDash([8 / s, 6 / s]); g.lineWidth = 2 / s; g.strokeStyle = '#ffd400';
+      g.strokeRect(r.x, r.y, r.w, r.h);
+    }
+    g.restore();
+  }
+
+  // ドラッグ中は、指で動かしている位置をそのまま見せる
+  _liveRect(m, t) {
+    if (this.drag && this.drag.m === m && this.drag.rect) return this.drag.rect;
+    return rectAt(m, t);
+  }
+
+  // 画面上の1点が、映像の何画素にあたるか
+  _scale() {
+    const b = this.canvas.getBoundingClientRect();
+    const W = this.canvas.width || 1, H = this.canvas.height || 1;
+    return Math.min(b.width / W, b.height / H) || 1;
+  }
+
+  _pt(e) {
+    const b = this.canvas.getBoundingClientRect();
+    const W = this.canvas.width, H = this.canvas.height, s = this._scale();
+    const ox = (b.width - W * s) / 2, oy = (b.height - H * s) / 2;
+    return { x: Math.max(0, Math.min(W, (e.clientX - b.left - ox) / s)), y: Math.max(0, Math.min(H, (e.clientY - b.top - oy) / s)) };
+  }
+
+  _down(e) {
+    if (!this.active || !this.canvas.width) return;
+    e.preventDefault();
+    this.video.pause();
+    this.canvas.setPointerCapture?.(e.pointerId);
+    const p = this._pt(e), t = this.time, s = this._scale();
+    // 選んでいる囲みのつまみ → 大きさを変える
+    if (this.sel) {
+      const r = rectAt(this.sel, t);
+      if (r && Math.hypot(p.x - (r.x + r.w), p.y - (r.y + r.h)) < HANDLE_CSS / s) {
+        this.drag = { mode: 'size', m: this.sel, p, r0: { ...r }, rect: { ...r } };
+        return;
+      }
+    }
+    // 囲みの中 → 選んで動かす（あとから作ったものを優先）
+    for (let i = this.masks.length - 1; i >= 0; i--) {
+      const m = this.masks[i], r = rectAt(m, t);
+      if (r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) {
+        this.sel = m;
+        this.drag = { mode: 'move', m, p, r0: { ...r }, rect: null, moved: false };
+        this.onChange();
+        this.draw();
+        return;
+      }
+    }
+    // 何もない所 → 新しく囲む
+    this.drag = { mode: 'new', p, rect: { x: p.x, y: p.y, w: 0, h: 0 } };
+  }
+
+  _move(e) {
+    const d = this.drag;
+    if (!d) return;
+    e.preventDefault();
+    const p = this._pt(e), W = this.canvas.width, H = this.canvas.height;
+    if (d.mode === 'new') {
+      d.rect = { x: Math.min(p.x, d.p.x), y: Math.min(p.y, d.p.y), w: Math.abs(p.x - d.p.x), h: Math.abs(p.y - d.p.y) };
+    } else if (d.mode === 'move') {
+      const dx = p.x - d.p.x, dy = p.y - d.p.y;
+      if (!d.moved && Math.hypot(dx, dy) * this._scale() < 6) return;
+      d.moved = true;
+      d.rect = { x: Math.max(-d.r0.w / 2, Math.min(W - d.r0.w / 2, d.r0.x + dx)), y: Math.max(-d.r0.h / 2, Math.min(H - d.r0.h / 2, d.r0.y + dy)), w: d.r0.w, h: d.r0.h };
+    } else if (d.mode === 'size') {
+      d.rect = { x: d.r0.x, y: d.r0.y, w: Math.max(MIN_SIDE, p.x - d.r0.x), h: Math.max(MIN_SIDE, p.y - d.r0.y) };
+    }
+    this.draw();
+  }
+
+  _up() {
+    const d = this.drag;
+    if (!d) return;
+    this.drag = null;
+    const t = this.time;
+    if (d.mode === 'new') {
+      const r = d.rect;
+      if (r.w >= MIN_SIDE && r.h >= MIN_SIDE) {
+        const m = { id: this.nextId, no: this.nextId, kind: 'blur', from: 0, to: this.duration, keys: [{ t, ...r }] };
+        this.nextId++;
+        this.masks.push(m);
+        this.sel = m;
+      } else {
+        this.sel = null;   // 何もない所を軽く触ったら、選ぶのをやめる
+      }
+    } else if (d.rect && (d.mode === 'size' || d.moved)) {
+      setKey(d.m, t, d.rect);
+    }
+    this.onChange();
+    this.draw();
+  }
+
+  // ---- 選んでいる囲みの操作 ----
+  setKind(kind) { if (this.sel) { this.sel.kind = kind; this.onChange(); this.draw(); } }
+  setFrom() { if (this.sel) { this.sel.from = Math.min(this.time, this.sel.to); this.onChange(); this.draw(); } }
+  setTo() { if (this.sel) { this.sel.to = Math.max(this.time, this.sel.from); this.onChange(); this.draw(); } }
+  setAll() { if (this.sel) { this.sel.from = 0; this.sel.to = this.duration; this.onChange(); this.draw(); } }
+  removeSel() {
+    if (!this.sel) return;
+    this.masks = this.masks.filter((m) => m !== this.sel);
+    this.sel = null;
+    this.onChange();
+    this.draw();
+  }
+  select(id) { this.sel = this.masks.find((m) => m.id === id) || null; this.onChange(); this.draw(); }
+}
+
+// ---- 書き出し ----
+// 元の動画を再生しながら、囲みを隠した画面を録画し直す。
+// 音声は、動画の音をスピーカーに出さずにそのまま録音へつなぐ。
+// 必ず「押した」その場で呼ぶこと（iPhoneでは、押した直後でないと再生と音の準備が許されない）
+export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
+  const url = URL.createObjectURL(blob);
+  const v = document.createElement('video');
+  v.playsInline = true;
+  v.preload = 'auto';
+  v.src = url;
+  let ac = null, audioTracks = [];
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    ac = new AC();
+    const src = ac.createMediaElementSource(v);
+    const dest = ac.createMediaStreamDestination();
+    src.connect(dest);
+    audioTracks = dest.stream.getAudioTracks();
+  } catch (e) {
+    v.muted = true;   // 音を扱えない端末では、映像だけ書き出す
+    audioTracks = [];
+  }
+  // 押した直後に一度再生して、あとで再生してよい状態にしておく
+  const unlock = v.play().catch(() => {});
+  if (ac && ac.state === 'suspended') ac.resume().catch(() => {});
+
+  let cancelled = false, rec = null, finish = null;
+  const job = {
+    cancel() { cancelled = true; if (finish) finish(); },
+    done: null,
+  };
+  job.done = (async () => {
+    try {
+      await unlock;
+      if (!v.videoWidth) await new Promise((r) => v.addEventListener('loadedmetadata', r, { once: true }));
+      v.pause();
+      if (cancelled) throw new Error('cancelled');
+      const W = v.videoWidth, H = v.videoHeight;
+      const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : durationSec || 0;
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const g = c.getContext('2d', { alpha: false });
+      const paint = (t) => {
+        g.drawImage(v, 0, 0, W, H);
+        for (const m of masks) { const r = rectAt(m, t); if (r) hide(g, v, r, m.kind, W, H); }
+      };
+      // 最初の場面へ戻して、最初のコマを描いてから録画を始める
+      v.currentTime = 0;
+      await new Promise((r) => { v.addEventListener('seeked', r, { once: true }); setTimeout(r, 1500); });
+      paint(0);
+
+      const mime = pickMimeType();
+      if (mime === null || !c.captureStream) throw new Error('この端末では書き出しができません');
+      const stream = c.captureStream(30);
+      for (const t of audioTracks) stream.addTrack(t);
+      const opts = { videoBitsPerSecond: 5_000_000 };
+      if (mime) opts.mimeType = mime;
+      const chunks = [];
+      rec = new MediaRecorder(stream, opts);
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      const stopped = new Promise((r) => { rec.onstop = r; });
+      rec.start(1000);
+
+      // 再生しながら描く
+      await new Promise((done) => {
+        let lastT = -1, stuckAt = performance.now();
+        // 再生が止まってコマが来なくなっても、待ち続けないようにする
+        const wd = setInterval(() => { if (performance.now() - stuckAt > 4000) resolve(); }, 1000);
+        const resolve = () => { clearInterval(wd); done(); };
+        finish = resolve;
+        const step = (_now, meta) => {
+          if (cancelled) return resolve();
+          const t = meta && typeof meta.mediaTime === 'number' ? meta.mediaTime : v.currentTime;
+          paint(t);
+          if (onProgress && dur) onProgress(Math.min(1, t / dur));
+          if (t !== lastT) { lastT = t; stuckAt = performance.now(); }
+          if (v.ended || (dur && t >= dur - 0.03)) return resolve();
+          // 再生が止まったまま進まなければ、そこで終える
+          if (performance.now() - stuckAt > 4000) return resolve();
+          if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(step); else requestAnimationFrame(() => step());
+        };
+        v.addEventListener('ended', () => resolve(), { once: true });
+        v.play().then(() => {
+          if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(step); else requestAnimationFrame(() => step());
+        }).catch(() => resolve());
+      });
+      v.pause();
+      rec.stop();
+      await stopped;
+      if (cancelled) throw new Error('cancelled');
+      const type = (rec.mimeType || chunks[0]?.type || 'video/mp4').split(';')[0];
+      return { blob: new Blob(chunks, { type }), type };
+    } finally {
+      try { if (rec && rec.state !== 'inactive') rec.stop(); } catch (e) { /* 何もしない */ }
+      try { ac && ac.close(); } catch (e) { /* 何もしない */ }
+      v.removeAttribute('src'); v.load();
+      URL.revokeObjectURL(url);
+    }
+  })();
+  return job;
+}
