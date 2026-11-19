@@ -1,7 +1,7 @@
 // 通信がなくても起動できるように、アプリの部品をスマホの中に保存しておく仕組み（サービスワーカー）。
 // 撮影した映像はここでは一切扱わない。保存するのはアプリの部品だけ。
 
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = 'kaigo-camera-' + VERSION;   // 名前を変えると古い保存分が消えなくなるので、接頭辞はそのまま
 
 // 最初に開いたときに、まとめて保存する部品
@@ -15,6 +15,8 @@ const PRECACHE = [
   './face-id.js',
   './yunet.js',
   './yunet-worker.js',
+  './pose.js',
+  './pose-worker.js',
   './manifest.json',
   './icon-180.png',
   './icon-512.png',
@@ -29,10 +31,11 @@ const PRECACHE = [
   './vendor/ort/ort-wasm-simd-threaded.mjs',
   './vendor/ort/ort-wasm-simd-threaded.wasm',
   './vendor/yunet/face_detection_yunet_2023mar.onnx',
+  './vendor/pose/pose_landmarker_lite.task',
 ];
 
 // 保存してよい種類（動画などは保存しない）
-const KEEP = /\.(html|css|js|mjs|json|png|wasm|tflite|bin|onnx)$/i;
+const KEEP = /\.(html|css|js|mjs|json|png|wasm|tflite|bin|onnx|task)$/i;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

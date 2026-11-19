@@ -9,6 +9,7 @@
 import { FilesetResolver, FaceDetector } from './vendor/tasks-vision/vision_bundle.mjs';
 import { loadFaceId, faceIdReady, cropAligned, describe, distance } from './face-id.js';
 import { YuNetDetector } from './yunet.js';
+import { PoseFinder } from './pose.js';
 
 const HOLD_BLUR_MS = 1200;   // ぼかす顔を見失ってから、ぼかしを残す時間
 const HOLD_CLEAR_MS = 800;   // ぼかさない顔を見失ってから、選択を覚えておく時間（過ぎると選択解除＝ぼかしに戻る）
@@ -78,6 +79,18 @@ const Y_CALM_DUTY = 3;        // 休み時間は、1回の検出にかかった�
 const Y_HOT_MS = 1200;         // カメラの動きが止まってから、全力で探し続ける時間
 const Y_START_HOT_MS = 1500;  // カメラを開いた直後に全力で探す時間
 const Y_TWIN_MAX_MS = 4000;   // 2つ同時に動かすのは、続けてこの時間まで（振り続けても発熱しすぎないように）
+// 姿勢から頭の位置を割り出す（遠くの小さな顔は、顔の検出では見つけにくい）
+const POSE_GAP_SWING_MS = 150; // カメラを振っている間の間隔
+const POSE_GAP_MS = 350;      // 調べる間隔
+const POSE_GAP_BUSY_MS = 1000; // 近くの顔をはっきり追えているときの間隔（発熱をおさえる）
+const POSE_BIG_FACE = 0.14;   // 顔の幅が画面の幅のこの割合以上なら「近くの顔」
+const POSE_DUTY = 3;          // 休み時間は、1回にかかった時間のこの倍以上とる
+const POSE_VIS = 0.6;         // 体の点が「見えている」とみなす確かさ
+const POSE_TWICE_MS = 1200;   // 同じ場所を2回指したら頭と認める。2回目を待つ時間
+const POSE_PERSON_MS = 5000;  // 見つけた人の周りを拡大して調べ続ける時間
+const POSE_ZOOM = 1.5;        // 人の大きさに対する、拡大して調べる範囲の広さ
+const POSE_KEEP_MS = 2500;    // 頭の位置が分かってから、ぼかしを保つ時間
+const POSE_BOX = 1.5;         // 頭の半径に対する、顔の枠の大きさ
 // 映像を少し遅らせて画面に出す。検出は最新のコマで行うので、顔を見つけたら、まだ出していないコマにさかのぼってぼかせる
 const OUT_DELAY_MS = 450;     // 遅らせる時間
 const OUT_MAX_FRAMES = 18;    // ためておくコマ数の上限
@@ -126,6 +139,10 @@ export class BlurCamera {
     this.vctx2 = this.vCanvas.getContext('2d', { alpha: false });
     this.onStatus = onStatus || (() => {});
     this.yunet = null;          // もう1つの顔検出（読み込めたときだけ使う）
+    this.pose = null;           // 姿勢から頭を割り出す部品（読み込めたときだけ使う）
+    this.poseBusy = false;
+    this.pQueue = [];
+    this.poseCands = [];
     this.delayQ = [];           // 遅らせて出すコマの列（メモリの中だけ。録画はされない）
     this.framePool = [];        // 使い回す画面
     this.shown = null;          // いま画面に出ているコマの情報
@@ -193,9 +210,9 @@ export class BlurCamera {
       this.yLoad = y.load().then((ok) => {
         if (!ok) return;
         this.yunet = y;
-        // 2つ目は撮影の準備を待たせずに、後ろで読み込む
-        const y2 = new YuNetDetector();
-        y2.load().then((ok2) => { if (ok2) this.yunet2 = y2; }).catch(() => {});
+        // 姿勢の部品は、撮影の準備を待たせずに後ろで読み込む
+        const p = new PoseFinder();
+        p.load().then((ok2) => { if (ok2) this.pose = p; }).catch(() => {});
       }).catch(() => {});
     }
     await Promise.race([
@@ -300,12 +317,14 @@ export class BlurCamera {
         this._grayUpdate(W, H);
         this._updateTracks(this._detect(W, H, now), now);
         this._applyYunet(now, W, H);
+        this._applyPose(now, W, H);
         this._follow(now, W, H);
         this._mergeTracks(now);
         this._verify(now);
         detected = true;
         this._identify(now);
         this._scheduleYunet(now, W, H);
+        this._schedulePose(now, W, H);
       } catch (e) {
         detected = false;
       }
@@ -367,7 +386,7 @@ export class BlurCamera {
     if (usedRot === 0 ? score >= VERIFY_STRONG : (pick.vN >= 4 && pick.vAvg >= VERIFY_STRONG)) pick.strong = true;
     const turned = (pick.rot || 0) !== 0;
     const okLine = turned ? VERIFY_OK_TURNED : VERIFY_OK, ngLine = turned ? VERIFY_NG_TURNED : VERIFY_NG;
-    const yOk = now - (pick.yOkAt || -1e9) < Y_RECENT_MS;   // YuNetが最近「顔」と判断した
+    const yOk = now - (pick.yOkAt || -1e9) < Y_RECENT_MS || now - (pick.poseAt || -1e9) < POSE_KEEP_MS;   // 別の検出が最近「顔」と判断した
     if (pick.strong || yOk || pick.vAvg >= okLine) {
       pick.verified = true; pick.fake = false; pick.unsureN = 0;
     } else {
@@ -684,7 +703,7 @@ export class BlurCamera {
     }
     // 仮にぼかした枠で、もう1つの検出が確かめられなかったものは外す
     for (const t of this.tracks) {
-      if (t.provAt && !t.fake && !t.clear && now - t.provAt > PROV_MS) {
+      if (t.provAt && !t.fake && !t.clear && now - t.provAt > (t.poseProv ? POSE_TWICE_MS : PROV_MS)) {
         if ((t.yOkAt || 0) >= t.provAt || t.strong || t.verified) { t.provAt = 0; continue; }
         t.provAt = 0; t.fake = true; t.verified = false; this._rememberFake(t, now);
       }
@@ -700,7 +719,8 @@ export class BlurCamera {
       // 見た目で追いかけられている顔は、検出が途切れていても残す（マスクの横顔などは検出が途切れやすい）
       const firmFace = t.strong || (t.yBest || 0) >= Y_FIRM;
       const followed = t.followAt && now - t.followAt < 200 && now - Math.max(t.seen, t.yAt || 0) < (firmFace ? FOLLOW_MAX_MS : FOLLOW_WEAK_MS);
-      if (followed) return true;
+      if (followed || (!t.provAt && now - (t.poseAt || -1e9) < POSE_KEEP_MS)) return true;
+      if (t.provAt && t.poseProv) return now - t.provAt < POSE_TWICE_MS;
       // 点数の低い枠は、カメラを動かしている間に見失ったらすぐ消す
       if (!firmFace && this._moving(now)) return now - t.seen < HOLD_SWING_MS;
       if (!t.verified) return now - t.seen < HOLD_UNSURE_MS;
@@ -820,6 +840,8 @@ export class BlurCamera {
     for (const c of this.ySoft || []) { c.cx += dx; c.cy += dy; }
     for (const c of this.yProps || []) { c.cx += dx; c.cy += dy; }
     for (const c of this.yRejects || []) { c.cx += dx; c.cy += dy; }
+    for (const c of this.poseCands || []) { c.cx += dx; c.cy += dy; }
+    if (this.personBox) { this.personBox.cx += dx; this.personBox.cy += dy; }
   }
 
   // 顔の見た目（白黒の点の並び）を覚える。box は元の画面の座標
@@ -1013,6 +1035,102 @@ export class BlurCamera {
     this._learnLook(nt, this.gray, this.gw, this.gh, this.gk, nt);
     this.tracks.push(nt);
     if (this.onBirth) this.onBirth({ s: b.s, s0: b.s, rot: b.rot, cx: Math.round(b.x + b.w / 2), cy: Math.round(b.y + b.h / 2), w: Math.round(b.w), y: true });
+    return nt;
+  }
+
+  // ---- 姿勢から頭の位置を割り出す ----
+  _schedulePose(now, W, H) {
+    if (!this.pose || this.poseBusy) return;
+    const nearFace = this.tracks.some((t) => !t.fake && t.verified && t.w > W * POSE_BIG_FACE);
+    const swinging = now - (this.movedAt || -1e9) < Y_HOT_MS;
+    const gap = Math.max(swinging ? POSE_GAP_SWING_MS : nearFace ? POSE_GAP_BUSY_MS : POSE_GAP_MS, (this.poseMs || 0) * POSE_DUTY);
+    if (now - (this.poseEnd || -1e9) < gap) return;
+    this.poseBusy = true;
+    // 画面全体と、見つけた人の周りの拡大を、交互に調べる
+    this.poseTurn = !this.poseTurn;
+    const crop = this.poseTurn ? this._personCrop(now, W, H) : null;
+    const job = { camX: this.camX || 0, camY: this.camY || 0, W, H, crop };
+    const began = performance.now();
+    this.pose.detect(this.raw, crop)
+      .then((people) => { if (this.running) this.pQueue.push({ job, people }); })
+      .catch(() => {})
+      .finally(() => {
+        this.poseBusy = false;
+        this.poseEnd = performance.now();
+        this.poseMs = this.poseMs ? this.poseMs * 0.8 + (this.poseEnd - began) * 0.2 : this.poseEnd - began;
+      });
+  }
+
+  // 見つけた人の周りの、拡大して調べる範囲
+  _personCrop(now, W, H) {
+    const p = this.personBox;
+    if (!p || now - p.at > POSE_PERSON_MS) return null;
+    const side = Math.max(p.w, p.h, 200) * POSE_ZOOM;
+    const w = Math.round(Math.min(side, W)), h = Math.round(Math.min(side, H));
+    if (w >= W * 0.9 && h >= H * 0.9) return null;
+    const x = Math.round(Math.max(0, Math.min(W - w, p.cx - w / 2))), y = Math.round(Math.max(0, Math.min(H - h, p.cy - h / 2)));
+    return { x, y, w, h };
+  }
+
+  // 同じ場所を少し前にも指していれば true
+  _poseTwice(cx, cy, r, now) {
+    this.poseCands = this.poseCands.filter((c) => now - c.at < POSE_TWICE_MS);
+    const hit = this.poseCands.some((c) => c.at < now && Math.hypot(c.cx - cx, c.cy - cy) < Math.max(c.r, r) * 1.5);
+    this.poseCands.push({ cx, cy, r, at: now });
+    return hit;
+  }
+
+  _applyPose(now, W, H) {
+    if (!this.pQueue.length) return;
+    for (const { job, people } of this.pQueue.splice(0)) {
+      if (job.W !== W || job.H !== H) continue;
+      // 調べている間にカメラが動いた分を足す
+      const dx = (this.camX || 0) - job.camX, dy = (this.camY || 0) - job.camY;
+      const c = job.crop;
+      for (const raw of people) {
+        // 拡大して調べたときは、画面全体の座標に戻す
+        const lm = c ? raw.map((p) => ({ x: (c.x + p.x * c.w) / W, y: (c.y + p.y * c.h) / H, v: p.v })) : raw;
+        const head = poseHead(lm, W, H);
+        if (!head) continue;
+        const cx = head.cx + dx, cy = head.cy + dy, r = head.r;
+        // 人の範囲を覚える
+        const seen = lm.filter((p) => p.v > 0.5);
+        const xs = seen.map((p) => p.x * W), ys = seen.map((p) => p.y * H);
+        const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+        this.personBox = { cx: (x0 + x1) / 2 + dx, cy: (y0 + y1) / 2 + dy, w: x1 - x0, h: y1 - y0, at: now };
+        let best = null, bestD = Infinity;
+        for (const t of this.tracks) {
+          const d = Math.hypot(t.x + t.w / 2 - cx, t.y + t.h / 2 - cy);
+          if (d < Math.max(t.w * 0.9, r * 1.6) && d < bestD) { bestD = d; best = t; }
+        }
+        const twice = this._poseTwice(cx, cy, r, now);
+        if (best) {
+          best.poseAt = now;
+          best.yAt = now;
+          if (best.clear) continue;
+          if ((best.fake || !best.verified) && twice) {
+            best.fake = false; best.verified = true; best.probation = 0; best.unsureN = 0; best.provAt = 0;
+            best.yOkAt = now; best.yBest = Math.max(best.yBest || 0, Y_FIRM);
+          }
+          // 検出で位置が更新されていない顔は、頭の位置へ寄せる
+          // 1回だけの外れた反応で枠を動かさない（柄のある服の胸を頭と取りちがえることがあるため）
+          const off = bestD > r * 0.7 && twice && now - (best.yOkAt || -1e9) > 600;
+          if (off || (bestD <= r * 0.7 && now - (best.upAt || -1e9) > 400)) {
+            const a = off ? 0.85 : 0.6;
+            best.x += (cx - best.w / 2 - best.x) * a; best.y += (cy - best.h / 2 - best.y) * a;
+            best.rcx = cx; best.rcy = cy; best.rsrc = 'pose'; best.upAt = now;
+            if (off && this.gray) this._learnLook(best, this.gray, this.gw, this.gh, this.gk, best);
+          }
+        } else {
+          // 1回目の反応で仮にぼかす。2回目が来なければ取り消す（映像を遅らせているので、録画前に消せる）
+          const w = r * POSE_BOX * 2;
+          const nt = this._birthY({ x: cx - w / 2, y: cy - w / 2, w, h: w, s: Y_FIRM, rot: 0, kp: [] }, twice, now);
+          nt.poseAt = now;
+          nt.poseProv = !twice;
+          nt.kpAt = 0;
+        }
+      }
+    }
   }
 
   // 同じ場所で少し前にも反応していれば true。1回きりの反応（ライトや模様のまぐれ）をふるい落とす
@@ -1368,6 +1486,27 @@ export class BlurCamera {
   }
 }
 
+// 体の点から頭の位置を求める。顔の点と両肩がはっきり見えているときだけ採用する（足だけが映った場面の誤認を防ぐ）
+function poseHead(lm, W, H) {
+  if (!lm || lm.length < 25) return null;
+  const P = lm.map((p) => ({ x: p.x * W, y: p.y * H, v: p.v }));
+  const face = P.slice(0, 11).filter((p) => p.v > POSE_VIS);
+  const sa = P[11], sb = P[12];
+  if (face.length < 4 || sa.v < POSE_VIS || sb.v < POSE_VIS) return null;
+  const inside = (p) => p.x > -10 && p.x < W + 10 && p.y > -10 && p.y < H + 10;
+  if (!inside(sa) || !inside(sb)) return null;
+  const cx = face.reduce((a, p) => a + p.x, 0) / face.length, cy = face.reduce((a, p) => a + p.y, 0) / face.length;
+  // 腰が見えているときは、頭が肩より腰の反対側にあることを確かめる（胸を頭と取りちがえるのを防ぐ）
+  const ha = P[23], hb = P[24];
+  if (ha.v > POSE_VIS && hb.v > POSE_VIS) {
+    const mx = (sa.x + sb.x) / 2, my = (sa.y + sb.y) / 2, ux = mx - (ha.x + hb.x) / 2, uy = my - (ha.y + hb.y) / 2;
+    if ((cx - mx) * ux + (cy - my) * uy <= 0) return null;
+  }
+  const d = (a, b) => Math.hypot(P[a].x - P[b].x, P[a].y - P[b].y);
+  const r = Math.max(d(7, 8) * 0.62, d(0, 9) * 1.5, d(11, 12) * 0.28, 12);
+  return { cx, cy, r };
+}
+
 // 枠を画面の中に収める
 function clampRect(r, W, H) {
   const x0 = Math.max(0, Math.floor(r.x)), y0 = Math.max(0, Math.floor(r.y));
@@ -1387,7 +1526,7 @@ function sameFace(a, b) {
 
 // drop の情報を keep に引き継ぐ
 function absorbTrack(keep, drop) {
-  for (const k of ['seen', 'yAt', 'yOkAt', 'dAt', 'followAt', 'fullAt']) keep[k] = Math.max(keep[k] || 0, drop[k] || 0);
+  for (const k of ['seen', 'yAt', 'yOkAt', 'dAt', 'followAt', 'fullAt', 'poseAt']) keep[k] = Math.max(keep[k] || 0, drop[k] || 0);
   keep.strong = keep.strong || drop.strong;
   if (!drop.fake) keep.verified = keep.verified || drop.verified;
   if (drop.kpAt > (keep.kpAt || 0)) { keep.kp = drop.kp; keep.kpAt = drop.kpAt; }
