@@ -79,6 +79,8 @@ const Y_CALM_DUTY = 3;        // 休み時間は、1回の検出にかかった�
 const Y_HOT_MS = 1200;         // カメラの動きが止まってから、全力で探し続ける時間
 const Y_START_HOT_MS = 1500;  // カメラを開いた直後に全力で探す時間
 const Y_TWIN_MAX_MS = 4000;   // 2つ同時に動かすのは、続けてこの時間まで（振り続けても発熱しすぎないように）
+const EDGE_REACH = 0.5;       // ぼかしの端から画面の端までが、ぼかしの大きさのこの割合より近ければ、画面の端まで広げる
+const EDGE_HOLD_MS = 6000;    // 画面の端からはみ出しかけた顔を、その位置でぼかし続ける長さ（上限）
 const FLIP_COVER_MS = 1200;   // カメラを切り替えた直後、画面全体をぼかしておく時間
 // 姿勢から頭の位置を割り出す（遠くの小さな顔は、顔の検出では見つけにくい）
 const POSE_GAP_SWING_MS = 150; // カメラを振っている間の間隔
@@ -745,7 +747,8 @@ export class BlurCamera {
       const atEdge = t.x < m || t.y < m || t.x + t.w > W - m || t.y + t.h > H - m;
       // 見た目で追いかけられている顔は、検出が途切れていても残す（マスクの横顔などは検出が途切れやすい）
       const firmFace = t.strong || (t.yBest || 0) >= Y_FIRM;
-      const followed = t.followAt && now - t.followAt < 200 && now - Math.max(t.seen, t.yAt || 0) < (firmFace ? FOLLOW_MAX_MS : FOLLOW_WEAK_MS);
+      const followed = (t.followAt && now - t.followAt < 200 && now - Math.max(t.seen, t.yAt || 0) < (firmFace ? FOLLOW_MAX_MS : FOLLOW_WEAK_MS))
+        || (t.verified && !t.fake && t.edgeAt && now - t.edgeAt < 200 && now - t.edgeFrom < EDGE_HOLD_MS);   // 画面の端からはみ出しかけている顔
       if (followed || (!t.provAt && now - (t.poseAt || -1e9) < POSE_KEEP_MS)) return true;
       if (t.provAt && t.poseProv) return now - t.provAt < POSE_TWICE_MS;
       // 点数の低い枠は、カメラを動かしている間に見失ったらすぐ消す
@@ -920,7 +923,11 @@ export class BlurCamera {
       const s = score(px, py);
       if (s > best) { best = s; bx = px; by = py; }
     }
-    return { cx: (bx + tpl.iw / 2) / gk, cy: (by + tpl.ih / 2) / gk, ncc: best };
+    // 画面の端で探す範囲が削られていて、一番似ている場所がその削られた側の端にあるときは、
+    // 顔が画面の外へはみ出しかけている（本当の位置は画面の外側）。内側の似た模様を顔とまちがえやすい
+    const atEdge = (xmax < pcx + r && bx >= xmax - 1) || (xmin > pcx - r && bx <= xmin + 1)
+      || (ymax < pcy + r && by >= ymax - 1) || (ymin > pcy - r && by <= ymin + 1);
+    return { cx: (bx + tpl.iw / 2) / gk, cy: (by + tpl.ih / 2) / gk, ncc: best, atEdge };
   }
 
   // 検出が来なかったコマでも、覚えた見た目を探して、ぼかしの位置を動かす
@@ -931,6 +938,20 @@ export class BlurCamera {
       const p = this._predict(t, now);
       const R = Math.max(t.w * 0.6, 24);
       const m = this._matchTemplate(t.tpl, this.gray, this.gw, this.gh, this.gk, p.cx, p.cy, R);
+      // 画面の端にかかっている顔が、内側の別の場所へ大きく飛ぼうとしたら、それも「はみ出しかけ」とみなす
+      // （半分切れた顔は見た目が合わず、近くの似た模様〔服・ぬいぐるみなど〕へ移りやすい）
+      const W = this.out.width, H = this.out.height, e = t.w * 0.15, j = t.w * 0.25;
+      const nearEdge = p.cx + t.w / 2 > W - e || p.cx - t.w / 2 < e || p.cy + t.h / 2 > H - e || p.cy - t.h / 2 < e;
+      const jumpIn = m && nearEdge && Math.hypot(m.cx - p.cx, m.cy - p.cy) > j;
+      if (m && (m.atEdge || jumpIn)) {
+        // 顔が画面の端からはみ出しかけている。内側へは動かさず、いまの位置（はみ出した位置）でぼかし続ける。
+        // 本当に画面の外へ出たときは、カメラの動きと一緒に枠も画面の外へ出ていく
+        if (!t.edgeFrom) t.edgeFrom = now;
+        if (now - t.edgeFrom < EDGE_HOLD_MS) { t.followAt = now; t.edgeAt = now; }
+        t.vx = (t.vx || 0) * 0.8; t.vy = (t.vy || 0) * 0.8;   // 見込みで外へ流れていかないように
+        continue;
+      }
+      t.edgeFrom = 0;
       if (!m || m.ncc < NCC_OK) continue;
       const dt = now - t.upAt;
       if (t.rsrc === 'ncc' && dt > 0 && dt < 400) {
@@ -1273,7 +1294,17 @@ export class BlurCamera {
     const speed = Math.hypot(t.vx || 0, t.vy || 0);
     const extra = speed < 0.15 ? 0 : Math.min(speed * 90, t.w * 0.5);   // ゆっくりのときは広げない
     const w = t.w * (side ? EXPAND_H : EXPAND_W) + extra, h = t.h * (side ? EXPAND_W : EXPAND_H) + extra;
-    return { x: cx - w / 2, y: cy - h / 2, w, h };
+    const r = { x: cx - w / 2, y: cy - h / 2, w, h };
+    // 画面の端の近くの顔は、ぼかしを画面の端まで広げる。半分はみ出した顔は検出も追いかけも
+    // ずれやすく、ぼかしが内側（胸など）へずれて、端に残った顔が見えてしまうのを防ぐ
+    const W = this.out.width, H = this.out.height;
+    if (W && H) {
+      if (r.x > 0 && r.x < r.w * EDGE_REACH) { r.w += r.x; r.x = 0; }
+      if (r.x + r.w < W && W - (r.x + r.w) < r.w * EDGE_REACH) r.w = W - r.x;
+      if (r.y > 0 && r.y < r.h * EDGE_REACH) { r.h += r.y; r.y = 0; }
+      if (r.y + r.h < H && H - (r.y + r.h) < r.h * EDGE_REACH) r.h = H - r.y;
+    }
+    return r;
   }
 
   _region(t, W, H) { return clampRect(this._regionRaw(t), W, H); }
