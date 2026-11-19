@@ -28,6 +28,9 @@ export class CanvasRecorder {
   get recording() { return !!this.rec && this.rec.state === 'recording'; }
   get elapsedMs() { return this.recording ? performance.now() - this.startedAt : 0; }
 
+  // audio：録画を始めるときに音を入れるか。
+  // 録画中に「音声あり／なし」を切り替えられるよう、マイクは常につないでおき、
+  // 「なし」の間はマイクの音を止めて無音を記録する（録画中に音声の線を足し引きすると、動画が壊れる端末があるため）
   async start({ audio }) {
     const mime = pickMimeType();
     if (mime === null) throw new Error('この端末のブラウザは録画に対応していません');
@@ -35,14 +38,13 @@ export class CanvasRecorder {
 
     const stream = this.canvas.captureStream(30);
     let audioOk = false;
-    if (audio) {
-      try {
-        this.audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        for (const t of this.audioStream.getAudioTracks()) stream.addTrack(t);
-        audioOk = true;
-      } catch (e) {
-        audioOk = false; // マイクが使えなければ音声なしで続ける
-      }
+    try {
+      this.audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      for (const t of this.audioStream.getAudioTracks()) { t.enabled = !!audio; stream.addTrack(t); }
+      audioOk = true;
+    } catch (e) {
+      audioOk = false; // マイクが使えなければ音声なしで続ける
+      this.audioStream = null;
     }
     const opts = { videoBitsPerSecond: 5_000_000 };
     if (mime) opts.mimeType = mime;
@@ -52,6 +54,18 @@ export class CanvasRecorder {
     this.rec.start(1000);
     this.startedAt = performance.now();
     return { audioOk };
+  }
+
+  // 録画中の音声あり／なし。マイクがつながっていなければ false を返す
+  setAudio(on) {
+    const ts = this.audioStream ? this.audioStream.getAudioTracks().filter((t) => t.readyState === 'live') : [];
+    for (const t of ts) t.enabled = !!on;
+    return ts.length > 0;
+  }
+
+  // マイクがいまも使えるか（カメラの切り替えなどで止まっていないか）
+  get micLive() {
+    return !!this.audioStream && this.audioStream.getAudioTracks().some((t) => t.readyState === 'live');
   }
 
   stop() {

@@ -35,7 +35,7 @@
     <label class="switchRow">
       <span>
         <strong>音声も録音する</strong>
-        <small>会話に名前が入るときは切にしてください</small>
+        <small>録画画面のボタンでも、録画中に切り替えられます</small>
       </span>
       <input id="audioToggle" type="checkbox" checked>
     </label>
@@ -55,7 +55,7 @@
     <ol>
       <li>撮る内容を選んで「撮影する」を押します。</li>
       <li>映った顔には、最初からぼかしが入ります。ぼかしたくない人の顔をタップすると、その人だけ外れます。もう一度タップすると戻ります。</li>
-      <li>赤いボタンで録画を始め、もう一度押して止めます。</li>
+      <li>赤いボタンで録画を始め、もう一度押して止めます。録画中でも「音声あり／なし」と「切替」（前後のカメラ）を押せます。</li>
       <li>確認の画面で最後まで再生し、ぼかしたい顔が見えていないか確かめます。</li>
       <li>「保存する」を押し、「ビデオを保存」（写真アプリに入ります）か「"ファイル"に保存」を選びます。</li>
     </ol>
@@ -63,7 +63,7 @@
     <ul>
       <li>写る人（ご本人・ご家族・職員）の了承を得てから撮ってください。病院や施設では、その場所の決まりに従ってください。</li>
       <li>顔の自動検出は完全ではありません。横顔、寝ている顔、マスクの顔、遠くの顔、画面の端の顔は、ぼかしが入らないことがあります。保存の前に必ず再生して確かめてください。</li>
-      <li>ぼかすのは顔だけです。名札、書類、ベッドの名前、窓や鏡に映った顔、声に入った名前は隠れません。写らない向きで撮り、必要なら音声を切にしてください。</li>
+      <li>ぼかすのは顔だけです。名札、書類、ベッドの名前、窓や鏡に映った顔、声に入った名前は隠れません。写らない向きで撮ってください。声を残したくない場面では、録画画面の「音声あり」ボタンを押すと「音声なし」になります（録画中でも切り替えられます）。</li>
       <li>ぼかす前の映像は保存されません。映像がこのスマホの外に送られることもありません。</li>
     </ul>
     <h3>ホーム画面に置くには</h3>
@@ -86,6 +86,11 @@
   </div>
   <div class="camBar">
     <button id="backBtn" class="btn ghost">もどる</button>
+    <button id="micBtn" class="micBtn" type="button" aria-pressed="true">
+      <svg class="micOn" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6"/></svg>
+      <svg class="micOff" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6"/><path class="slash" d="M4 3l16 18"/></svg>
+      <span id="micText">音声あり</span>
+    </button>
     <button id="recBtn" class="recBtn" aria-label="録画開始" disabled><span></span></button>
     <button id="flipBtn" class="btn ghost">切替</button>
   </div>

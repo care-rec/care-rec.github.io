@@ -114,6 +114,21 @@ html.camOn, html.camOn body { background: #000; }
 .recBtn span { width: 58px; height: 58px; border-radius: 50%; background: var(--rec); transition: all .15s; }
 .recBtn.on span { width: 30px; height: 30px; border-radius: 6px; }
 .recBtn:disabled { opacity: .35; }
+/* 音声あり／なし（録画中でも押せる） */
+.micBtn {
+  width: 76px; height: 64px; border-radius: 14px; border: 2px solid rgba(255,255,255,.55);
+  background: rgba(255,255,255,.14); color: #fff; padding: 4px 0 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; flex: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.micBtn svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.micBtn .micOff { display: none; }
+.micBtn .slash { stroke: #fff; stroke-width: 2.6; }
+.micBtn.off { background: var(--rec); border-color: var(--rec); }
+.micBtn.off .micOn { display: none; }
+.micBtn.off .micOff { display: block; }
+.micBtn:disabled { opacity: .35; }
 #cam { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: 0; top: 0; }
 
 /* 確認画面 */

@@ -79,6 +79,7 @@ const Y_CALM_DUTY = 3;        // 休み時間は、1回の検出にかかった�
 const Y_HOT_MS = 1200;         // カメラの動きが止まってから、全力で探し続ける時間
 const Y_START_HOT_MS = 1500;  // カメラを開いた直後に全力で探す時間
 const Y_TWIN_MAX_MS = 4000;   // 2つ同時に動かすのは、続けてこの時間まで（振り続けても発熱しすぎないように）
+const FLIP_COVER_MS = 1200;   // カメラを切り替えた直後、画面全体をぼかしておく時間
 // 姿勢から頭の位置を割り出す（遠くの小さな顔は、顔の検出では見つけにくい）
 const POSE_GAP_SWING_MS = 150; // カメラを振っている間の間隔
 const POSE_GAP_MS = 350;      // 調べる間隔
@@ -245,6 +246,15 @@ export class BlurCamera {
     await this.video.play();
     this._flushDelay();
     this.tracks = [];
+    // 前のカメラで調べていた結果は捨てる
+    this.yQueue = [];
+    this.pQueue = [];
+    this.poseCands = [];
+    this.personBox = null;
+    this.yRejects = [];
+    this.camX = 0; this.camY = 0;
+    this.grayPrev = null;
+    this.camGen = (this.camGen || 0) + 1;   // 調べている途中の結果が、切り替え後に届いても使わない
   }
 
   _closeCamera() {
@@ -253,10 +263,24 @@ export class BlurCamera {
     this.video.srcObject = null;
   }
 
+  // 録画中でも切り替えられる。切り替えた直後は顔の位置がまだ分からないので、
+  // 新しいカメラのコマが届き始めてから FLIP_COVER_MS の間は、画面全体をぼかす
   async flip() {
-    if (this.locked) return;
-    this.facing = this.facing === 'environment' ? 'user' : 'environment';
-    await this._openCamera();
+    if (this.flipping) return;
+    this.flipping = true;
+    const before = this.facing;
+    this.facing = before === 'environment' ? 'user' : 'environment';
+    this.coverFrom = -1;   // 新しいコマが届いたら、そこから数える
+    try {
+      await this._openCamera();
+    } catch (e) {
+      // 切り替えられなければ、元のカメラに戻す
+      this.facing = before;
+      try { await this._openCamera(); } catch (e2) { /* 何もしない */ }
+      throw e;
+    } finally {
+      this.flipping = false;
+    }
   }
 
   stop() {
@@ -331,7 +355,10 @@ export class BlurCamera {
     }
 
     // 3) いまのコマをためて、少し前のコマを録画される画面へ描く
-    this._pushFrame(W, H, now, detected);
+    // カメラを切り替えた直後は、顔を探し終えるまで画面全体をぼかす
+    if (this.coverFrom === -1) this.coverFrom = now;
+    const cover = this.coverFrom > 0 && now - this.coverFrom < FLIP_COVER_MS;
+    this._pushFrame(W, H, now, detected && !cover);
     this._drawDelayed(W, H, now);
 
     // 4) 目印（録画されない）
@@ -1002,8 +1029,9 @@ export class BlurCamera {
     this[busyKey] = true;
     const job = { at: now, kind, cells, gray: this.gray.slice(), gw: this.gw, gh: this.gh, gk: this.gk, W, H, camX: this.camX || 0, camY: this.camY || 0 };
     const began = performance.now();
+    const gen = this.camGen;
     det.detect(this.raw, cells.map(({ track, prop, ...c }) => c))
-      .then((boxes) => { if (this.running) this.yQueue.push({ job, boxes }); })
+      .then((boxes) => { if (this.running && gen === this.camGen) this.yQueue.push({ job, boxes }); })
       .catch(() => {})
       .finally(() => {
         this[busyKey] = false;
@@ -1051,8 +1079,9 @@ export class BlurCamera {
     const crop = this.poseTurn ? this._personCrop(now, W, H) : null;
     const job = { camX: this.camX || 0, camY: this.camY || 0, W, H, crop };
     const began = performance.now();
+    const gen = this.camGen;
     this.pose.detect(this.raw, crop)
-      .then((people) => { if (this.running) this.pQueue.push({ job, people }); })
+      .then((people) => { if (this.running && gen === this.camGen) this.pQueue.push({ job, people }); })
       .catch(() => {})
       .finally(() => {
         this.poseBusy = false;

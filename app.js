@@ -66,6 +66,7 @@ $('addForm').addEventListener('submit', (e) => {
 const camera = new BlurCamera({ video: $('cam'), out: $('out'), overlay: $('overlay') });
 const recorder = new CanvasRecorder($('out'));
 window.__kaigoCamera = camera; // 動作確認用
+window.__kaigoRecorder = recorder;
 // 一度タップしたら案内文を消す（「ぼかしなし」の表示と重ならないように）
 camera.onToggle = () => { $('hint').hidden = true; };
 let wakeLock = null;
@@ -122,10 +123,48 @@ $('backBtn').addEventListener('click', async () => {
   show('title');
 });
 
+// 録画中でも前後のカメラを切り替えられる（切り替えた直後は、少しの間画面全体がぼけます）
 $('flipBtn').addEventListener('click', async () => {
-  if (recorder.recording) return;
-  try { await camera.flip(); } catch (e) { setStatus('カメラを切り替えられませんでした。'); setTimeout(() => setStatus(''), 2000); }
+  const btn = $('flipBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
+    await camera.flip();
+  } catch (e) {
+    flash('カメラを切り替えられませんでした。', 2000);
+  } finally {
+    btn.disabled = false;
+  }
+  // カメラを開き直すと、マイクが止まる端末がある。そのときは知らせる
+  if (recorder.recording && micOn && !recorder.micLive) flash('マイクが止まりました。ここから先は音声が入りません。', 4000);
 });
+
+// ---- 音声あり／なし ----
+let micOn = $('audioToggle').checked;
+function flash(text, ms) {
+  setStatus(text);
+  clearTimeout(flash.timer);
+  flash.timer = setTimeout(() => setStatus(''), ms);
+}
+function renderMic() {
+  const b = $('micBtn');
+  b.classList.toggle('off', !micOn);
+  b.setAttribute('aria-pressed', String(micOn));
+  b.setAttribute('aria-label', micOn ? '音声あり（押すと音声なし）' : '音声なし（押すと音声あり）');
+  $('micText').textContent = micOn ? '音声あり' : '音声なし';
+}
+$('micBtn').addEventListener('click', () => {
+  micOn = !micOn;
+  $('audioToggle').checked = micOn;
+  renderMic();
+  if (recorder.recording) {
+    const ok = recorder.setAudio(micOn);
+    if (micOn && !ok) flash('マイクが使えないため、音声は入りません。', 3000);
+    else flash(micOn ? 'ここから音声を録音します' : 'ここから音声なし（無音）で録画します', 1800);
+  }
+});
+$('audioToggle').addEventListener('change', () => { micOn = $('audioToggle').checked; renderMic(); });
+renderMic();
 
 $('recBtn').addEventListener('click', async () => {
   const btn = $('recBtn');
@@ -135,25 +174,22 @@ $('recBtn').addEventListener('click', async () => {
       if (!camera.ready) throw new Error('顔検出の準備ができていません');
       camera.setLabel(labelText());
       camera.lock(true);
-      const { audioOk } = await recorder.start({ audio: $('audioToggle').checked });
+      const { audioOk } = await recorder.start({ audio: micOn });
       btn.classList.add('on');
       btn.setAttribute('aria-label', '録画停止');
-      $('flipBtn').disabled = true;
       $('recBadge').hidden = false;
       $('recTime').textContent = '0:00';
       timerId = setInterval(() => {
         const s = Math.floor(recorder.elapsedMs / 1000);
         $('recTime').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
       }, 500);
-      if ($('audioToggle').checked && !audioOk) {
-        setStatus('マイクが使えないため、音声なしで録画しています。');
-        setTimeout(() => setStatus(''), 3000);
-      }
+      if (micOn && !audioOk) flash('マイクが使えないため、音声なしで録画しています。', 3000);
+      // 録画中に気が変わっても、押した時点の設定にそろえる
+      recorder.setAudio(micOn);
     } else {
       const startedDate = new Date(Date.now() - recorder.elapsedMs);
       const { blob, type, durationMs } = await recorder.stop();
       btn.setAttribute('aria-label', '録画開始');
-      $('flipBtn').disabled = false;
       leaveCamera();
       openReview(blob, type, startedDate, durationMs);
     }
