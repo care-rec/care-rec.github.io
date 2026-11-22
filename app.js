@@ -409,7 +409,7 @@ function renderMaskUi() {
     renderMaskLine();
   }
   $('maskApply').disabled = !result || (!ms.length && result.blob === result.orig);
-  $('maskApply').textContent = !ms.length && result && result.blob !== result.orig ? '手動ぼかしをすべて外す' : '隠して作り直す';
+  $('maskApply').textContent = !ms.length && result && result.blob !== result.orig ? '手動ぼかしをすべて外して戻る' : '反映して確認に戻る';
 }
 
 // 「隠す時間」の帯：隠す時間（緑）、位置を決めた場面（白い点）、いまの場面（縦線）
@@ -503,7 +503,7 @@ $('maskApply').addEventListener('click', () => {
     setReviewSrc(result.url);
     renderInfo();
     const n = masks.length;
-    $('maskDoneNote').textContent = `手動ぼかしを${n}か所入れました。もう一度再生して、隠れているか確かめてください。直すときは、もう一度「名札などを手で隠す」を押します。`;
+    $('maskDoneNote').textContent = `手動ぼかしを${n}か所反映しました。まだ保存されていません。再生して隠れているか確かめてから、下の「保存する」を押してください。直すときは、もう一度「名札などを手で隠す」を押します。`;
     $('maskDoneNote').hidden = false;
     $('saveMsg').textContent = '';
   }).catch(() => {
@@ -514,8 +514,8 @@ $('maskApply').addEventListener('click', () => {
     editor.open(durSec());
     renderMaskUi();
     flashReview(exportLost
-      ? '画面が消えたため、作り直しを中止しました。画面をつけたまま、もう一度「隠して作り直す」を押してください。'
-      : '作り直しを中止しました。');
+      ? '画面が消えたため、反映を中止しました。画面をつけたまま、もう一度「反映して確認に戻る」を押してください。'
+      : '反映を中止しました。');
   }).finally(() => {
     if (exportJob === job) exportJob = null;
     try { lock?.release(); } catch (e) { /* 何もしない */ }

@@ -205,3 +205,4 @@ html.camOn, html.camOn body { background: #000; }
 .maskLine .ends { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted, #667); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .seg.three button { font-size: 14px; padding-left: 4px; padding-right: 4px; }
 .maskLine .rng { min-width: 6px; }
+.maskPanel .applyNote { margin: 4px 0 0; background: #fff7e0; border-radius: 10px; padding: 10px 12px; color: #5a4a12; }

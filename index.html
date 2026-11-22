@@ -161,13 +161,14 @@
         </ol>
         <p class="note">動かした場面には帯の上に白い点が付きます。点と点の間は、ぼかしがまっすぐなめらかに移ります。動きが曲がるところや速いところは、点を細かく増やしてください。最後に再生して、ずれていないか確かめてください。</p>
       </div>
+      <p class="note applyNote">ここではまだ<strong>保存されません</strong>。「反映して確認に戻る」を押すと、ぼかしを入れた動画を確認の画面で再生できます。確かめてから、そこで「保存する」を押します。</p>
       <div class="bottomBar two">
-        <button id="maskCancel" type="button" class="btn sub">やめる</button>
-        <button id="maskApply" type="button" class="btn primary" disabled>隠して作り直す</button>
+        <button id="maskCancel" type="button" class="btn sub">反映せずに戻る</button>
+        <button id="maskApply" type="button" class="btn primary" disabled>反映して確認に戻る</button>
       </div>
     </div>
     <div id="maskProgress" hidden>
-      <p class="maskHow"><strong>手動ぼかしを入れた動画を作っています。</strong><br>動画の長さと同じくらい時間がかかります。画面を消したり、ほかのアプリに切り替えたりしないでください。</p>
+      <p class="maskHow"><strong>手動ぼかしを動画に反映しています。</strong>（まだ保存はされません）<br>動画の長さと同じくらい時間がかかります。画面を消したり、ほかのアプリに切り替えたりしないでください。</p>
       <progress id="maskBar" max="1" value="0"></progress>
       <p id="maskPct" class="note center">0%</p>
       <button id="maskStop" type="button" class="btn sub wide">中止する</button>
