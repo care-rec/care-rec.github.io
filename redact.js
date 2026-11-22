@@ -37,11 +37,21 @@ const tiny = document.createElement('canvas');
 const tctx = tiny.getContext('2d');
 const mid = document.createElement('canvas');
 const mctx = mid.getContext('2d');
-export function hide(ctx, src, r, kind, W, H) {
+// shape が 'oval' のときは、だ円の形に隠す（顔に合う形。'rect' は名札などの四角いもの向け）
+function ovalPath(ctx, r) {
+  ctx.beginPath();
+  ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
+}
+export function hide(ctx, src, r, kind, W, H, shape = 'rect') {
   const x = Math.max(0, Math.floor(r.x)), y = Math.max(0, Math.floor(r.y));
   const w = Math.min(W, Math.ceil(r.x + r.w)) - x, h = Math.min(H, Math.ceil(r.y + r.h)) - y;
   if (w < 2 || h < 2) return;
-  if (kind === 'black') { ctx.fillStyle = '#000'; ctx.fillRect(x, y, w, h); return; }
+  const oval = shape === 'oval';
+  if (kind === 'black') {
+    ctx.fillStyle = '#000';
+    if (oval) { ovalPath(ctx, r); ctx.fill(); } else ctx.fillRect(x, y, w, h);
+    return;
+  }
   try {
     const tw = Math.max(2, Math.min(10, Math.round(w / 14))), th = Math.max(2, Math.round(tw * h / w));
     const mw = tw * 4, mh = th * 4;
@@ -52,13 +62,15 @@ export function hide(ctx, src, r, kind, W, H) {
     tctx.imageSmoothingEnabled = true; tctx.imageSmoothingQuality = 'high';
     tctx.drawImage(mid, 0, 0, mw, mh, 0, 0, tw, th);
     ctx.save();
+    if (oval) { ovalPath(ctx, r); ctx.clip(); }
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(tiny, 0, 0, tw, th, x, y, w, h);
     ctx.fillStyle = 'rgba(255,255,255,.12)';
     ctx.fillRect(x, y, w, h);
     ctx.restore();
   } catch (e) {
-    ctx.fillStyle = '#888'; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#888';
+    if (oval) { ovalPath(ctx, r); ctx.fill(); } else ctx.fillRect(x, y, w, h);
   }
 }
 
@@ -75,6 +87,8 @@ export class RedactEditor {
     this.active = false;
     this.drag = null;
     this.duration = 0;
+    this.ptrs = new Map();   // 画面に触れている指
+    this.pinch = null;
     canvas.addEventListener('pointerdown', (e) => this._down(e));
     canvas.addEventListener('pointermove', (e) => this._move(e));
     for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, (e) => this._up(e));
@@ -116,7 +130,7 @@ export class RedactEditor {
     const t = this.time;
     for (const m of this.masks) {
       const r = this._liveRect(m, t);
-      if (r) hide(g, v, r, m.kind, W, H);
+      if (r) hide(g, v, r, m.kind, W, H, m.shape);
     }
     // 目印（書き出しには入らない）
     const s = this._scale();
@@ -127,15 +141,21 @@ export class RedactEditor {
       const on = m === this.sel;
       g.lineWidth = (on ? 3 : 2) / s;
       g.setLineDash(on ? [] : [8 / s, 6 / s]);
-      g.strokeStyle = 'rgba(0,0,0,.6)'; g.strokeRect(r.x, r.y, r.w, r.h);
+      const outline = () => { if (m.shape === 'oval') { ovalPath(g, r); g.stroke(); } else g.strokeRect(r.x, r.y, r.w, r.h); };
+      g.strokeStyle = 'rgba(0,0,0,.6)'; outline();
       g.lineWidth = (on ? 2 : 1.5) / s;
-      g.strokeStyle = on ? '#ffd400' : '#fff'; g.strokeRect(r.x, r.y, r.w, r.h);
+      g.strokeStyle = on ? '#ffd400' : '#fff'; outline();
       g.setLineDash([]);
       // 番号
       g.font = `bold ${Math.round(15 / s)}px sans-serif`;
       g.fillStyle = on ? '#ffd400' : '#fff';
       g.strokeStyle = '#000'; g.lineWidth = 3 / s;
       g.strokeText(String(m.no), r.x + 5 / s, r.y + 18 / s); g.fillText(String(m.no), r.x + 5 / s, r.y + 18 / s);
+      if (on && m.shape === 'oval') {
+        // だ円は、大きさのつまみの位置が分かるよう、外枠をうすく見せる
+        g.setLineDash([4 / s, 4 / s]); g.lineWidth = 1 / s; g.strokeStyle = 'rgba(255,212,0,.7)';
+        g.strokeRect(r.x, r.y, r.w, r.h); g.setLineDash([]);
+      }
       if (on) {
         const hr = HANDLE_CSS / 2 / s;
         g.beginPath(); g.arc(r.x + r.w, r.y + r.h, hr, 0, Math.PI * 2);
@@ -145,7 +165,7 @@ export class RedactEditor {
     if (this.drag && this.drag.mode === 'new') {
       const r = this.drag.rect;
       g.setLineDash([8 / s, 6 / s]); g.lineWidth = 2 / s; g.strokeStyle = '#ffd400';
-      g.strokeRect(r.x, r.y, r.w, r.h);
+      ovalPath(g, r); g.stroke();
     }
     g.restore();
   }
@@ -170,11 +190,42 @@ export class RedactEditor {
     return { x: Math.max(0, Math.min(W, (e.clientX - b.left - ox) / s)), y: Math.max(0, Math.min(H, (e.clientY - b.top - oy) / s)) };
   }
 
+  // 2本の指でつまむ：選んでいる囲み（なければ2本の指の間にある囲み）を広げたり縮めたりし、指と一緒に動かす
+  _pinchStart() {
+    const [a, b] = [...this.ptrs.values()];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, t = this.time;
+    let m = this.sel && rectAt(this.sel, t) ? this.sel : null;
+    if (!m) m = [...this.masks].reverse().find((k) => { const r = rectAt(k, t); return r && mid.x >= r.x && mid.x <= r.x + r.w && mid.y >= r.y && mid.y <= r.y + r.h; }) || null;
+    this.drag = null;
+    if (!m) { this.pinch = { m: null }; this.draw(); return; }
+    const r0 = { ...rectAt(m, t) };
+    this.sel = m;
+    this.pinch = { m, r0, mid0: mid, d0: Math.max(8, Math.hypot(a.x - b.x, a.y - b.y)) };
+    this.drag = { mode: 'pinch', m, rect: { ...r0 } };
+    this.onChange();
+    this.draw();
+  }
+
+  _pinchMove() {
+    const P = this.pinch;
+    if (!P || !P.m || P.done || this.ptrs.size < 2) return;
+    const [a, b] = [...this.ptrs.values()];
+    const W = this.canvas.width, H = this.canvas.height;
+    const k = Math.max(0.1, Math.min(10, Math.hypot(a.x - b.x, a.y - b.y) / P.d0));
+    const w = Math.max(MIN_SIDE, Math.min(W * 1.5, P.r0.w * k)), h = Math.max(MIN_SIDE, Math.min(H * 1.5, P.r0.h * k));
+    const cx = P.r0.x + P.r0.w / 2 + (a.x + b.x) / 2 - P.mid0.x, cy = P.r0.y + P.r0.h / 2 + (a.y + b.y) / 2 - P.mid0.y;
+    this.drag.rect = { x: Math.max(-w / 2, Math.min(W - w / 2, cx - w / 2)), y: Math.max(-h / 2, Math.min(H - h / 2, cy - h / 2)), w, h };
+    this.draw();
+  }
+
   _down(e) {
     if (!this.active || !this.canvas.width) return;
     e.preventDefault();
     this.video.pause();
     this.canvas.setPointerCapture?.(e.pointerId);
+    this.ptrs.set(e.pointerId, this._pt(e));
+    if (this.ptrs.size === 2 && !this.pinch) { this._pinchStart(); return; }
+    if (this.ptrs.size > 1 || this.pinch) return;
     const p = this._pt(e), t = this.time, s = this._scale();
     // 選んでいる囲みのつまみ → 大きさを変える
     if (this.sel) {
@@ -200,6 +251,8 @@ export class RedactEditor {
   }
 
   _move(e) {
+    if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, this._pt(e));
+    if (this.pinch) { e.preventDefault(); this._pinchMove(); return; }
     const d = this.drag;
     if (!d) return;
     e.preventDefault();
@@ -217,7 +270,18 @@ export class RedactEditor {
     this.draw();
   }
 
-  _up() {
+  _up(e) {
+    this.ptrs.delete(e.pointerId);
+    if (this.pinch) {
+      // 指を1本離したところで決める。残りの指は、全部離すまで何もしない
+      const P = this.pinch, d = this.drag;
+      if (P.m && d && d.rect && !P.done) { setKey(P.m, this.time, d.rect); this.onChange(); }
+      P.done = true;
+      this.drag = null;
+      if (!this.ptrs.size) this.pinch = null;
+      this.draw();
+      return;
+    }
     const d = this.drag;
     if (!d) return;
     this.drag = null;
@@ -225,7 +289,7 @@ export class RedactEditor {
     if (d.mode === 'new') {
       const r = d.rect;
       if (r.w >= MIN_SIDE && r.h >= MIN_SIDE) {
-        const m = { id: this.nextId, no: this.nextId, kind: 'blur', from: 0, to: this.duration, keys: [{ t, ...r }] };
+        const m = { id: this.nextId, no: this.nextId, kind: 'blur', shape: 'oval', from: 0, to: this.duration, keys: [{ t, ...r }] };
         this.nextId++;
         this.masks.push(m);
         this.sel = m;
@@ -239,7 +303,22 @@ export class RedactEditor {
     this.draw();
   }
 
+  // ＋ボタン：画面のまん中に、顔くらいの大きさのだ円を置く。指で動かし、2本の指で大きさを変える
+  addOval() {
+    const W = this.canvas.width, H = this.canvas.height;
+    if (!W || !H) return;
+    this.video.pause();
+    const w = Math.round(Math.min(W, H) * 0.32), h = Math.round(w * 1.25);
+    const m = { id: this.nextId, no: this.nextId, kind: 'blur', shape: 'oval', from: 0, to: this.duration, keys: [{ t: this.time, x: (W - w) / 2, y: (H - h) / 2, w, h }] };
+    this.nextId++;
+    this.masks.push(m);
+    this.sel = m;
+    this.onChange();
+    this.draw();
+  }
+
   // ---- 選んでいる囲みの操作 ----
+  setShape(shape) { if (this.sel) { this.sel.shape = shape; this.onChange(); this.draw(); } }
   setKind(kind) { if (this.sel) { this.sel.kind = kind; this.onChange(); this.draw(); } }
   setFrom() { if (this.sel) { this.sel.from = Math.min(this.time, this.sel.to); this.onChange(); this.draw(); } }
   setTo() { if (this.sel) { this.sel.to = Math.max(this.time, this.sel.from); this.onChange(); this.draw(); } }
@@ -298,7 +377,7 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       const g = c.getContext('2d', { alpha: false });
       const paint = (t) => {
         g.drawImage(v, 0, 0, W, H);
-        for (const m of masks) { const r = rectAt(m, t); if (r) hide(g, v, r, m.kind, W, H); }
+        for (const m of masks) { const r = rectAt(m, t); if (r) hide(g, v, r, m.kind, W, H, m.shape); }
       };
       // 最初の場面へ戻して、最初のコマを描いてから録画を始める
       v.currentTime = 0;

@@ -340,6 +340,7 @@ function dropResult() {
 
 // ---- 手動ぼかし ----
 const editor = new RedactEditor({ video: $('review'), canvas: $('maskCanvas'), onChange: renderMaskUi });
+window.__kaigoEditor = editor; // 動作確認用
 let exportJob = null;
 let exportLost = false;
 
@@ -404,12 +405,15 @@ function renderMaskUi() {
     const all = sel.from <= 0.05 && sel.to >= durSec() - 0.05;
     $('maskRange').textContent = all ? '最初から最後まで隠す' : `${fmt(sel.from)} 〜 ${fmt(sel.to)} の間だけ隠す`;
     for (const b of document.querySelectorAll('#maskSel [data-kind]')) b.classList.toggle('on', b.dataset.kind === sel.kind);
+    for (const b of document.querySelectorAll('#maskSel [data-shape]')) b.classList.toggle('on', b.dataset.shape === (sel.shape || 'rect'));
   }
   $('maskApply').disabled = !result || (!ms.length && result.blob === result.orig);
   $('maskApply').textContent = !ms.length && result && result.blob !== result.orig ? '手動ぼかしをすべて外す' : '隠して作り直す';
 }
 
 for (const b of document.querySelectorAll('#maskSel [data-kind]')) b.addEventListener('click', () => editor.setKind(b.dataset.kind));
+for (const b of document.querySelectorAll('#maskSel [data-shape]')) b.addEventListener('click', () => editor.setShape(b.dataset.shape));
+$('maskAdd').addEventListener('click', () => editor.addOval());
 $('maskFrom').addEventListener('click', () => editor.setFrom());
 $('maskTo').addEventListener('click', () => editor.setTo());
 $('maskAll').addEventListener('click', () => editor.setAll());

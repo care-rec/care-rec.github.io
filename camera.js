@@ -100,6 +100,13 @@ const OUT_MAX_FRAMES = 18;    // ためておくコマ数の上限
 const BACK_GROW = 1.12;       // さかのぼってぼかすときは、位置の誤差を見込んで少し広げる
 const BLUR_STEPS = [2, 3, 4]; // にじませる幅（顔の範囲を72に縮めた画面での幅）。大きいほど強いぼかし
 const BLUR_HAZE = 0.12;       // 白っぽさ（0〜1）
+// ぼかしの動きをなめらかにする（脈打つような伸び縮み・小刻みなぶれを抑える）。
+// 位置はならして動かし、大きさは「顔を覆うのに足りなければすぐ広げ、余ったらゆっくり縮める」。
+// ならした位置から元の範囲がはみ出す分は必ず広げて覆うので、見逃しは増えない
+const SM_POS_MS = 170;        // 位置をならす強さ（ゆっくり動くとき）
+const SM_SNAP = 0.35;         // 顔の幅のこの割合以上ずれたら、ならさずにすぐ追いつく
+const SM_SHRINK_MS = 1200;     // 縮むときの速さ
+const SM_RESET_MS = 400;      // この時間ぼかしが途切れたら、ならし直す
 
 // 顔の見分け（距離が小さいほど似ている。テストでは同じ人 0.33〜0.52、別人 0.69以上）
 const ID_MATCH = 0.47;       // これ未満が2回続いたら「選んだ人」とみなしてぼかしを外す
@@ -1368,7 +1375,7 @@ export class BlurCamera {
         // 消えた枠のうち、一度も顔と確かめられなかったものは、ぼかさない
         if (!t.everOk && !t.clear && !this.tracks.includes(t)) continue;
         done.add(t);
-        const r = clampRect(m.r, W, H);
+        const r = clampRect(this._smooth(t, m.r, e.at), W, H);
         if (r.w < 2 || r.h < 2) continue;
         list.push({ t, r });
         if (t.clear) continue;
@@ -1384,6 +1391,27 @@ export class BlurCamera {
     this._drawLabel(W, H);
     this.shown = { at: e.at, marks: list };
     this.framePool.push(e.f);
+  }
+
+  // 出すコマごとのぼかし範囲を、顔ごとになめらかにする（R はそのコマで覆うべき範囲）
+  _smooth(t, R, at) {
+    const s = t.sm;
+    const cx = R.x + R.w / 2, cy = R.y + R.h / 2;
+    if (!s || at <= s.at || at - s.at > SM_RESET_MS) {
+      t.sm = { cx, cy, w: R.w, h: R.h, at };
+      return R;
+    }
+    const dt = at - s.at;
+    const d = Math.hypot(cx - s.cx, cy - s.cy) / Math.max(1, Math.min(R.w, R.h));
+    const a = d >= SM_SNAP ? 1 : 1 - Math.exp(-dt / (SM_POS_MS * (1 - d / SM_SNAP) + 1));
+    const nx = s.cx + (cx - s.cx) * a, ny = s.cy + (cy - s.cy) * a;
+    // ならした中心から、元の範囲を覆いきる大きさ
+    const needW = R.w + 2 * Math.abs(cx - nx), needH = R.h + 2 * Math.abs(cy - ny);
+    const k = Math.exp(-dt / SM_SHRINK_MS);
+    const w = needW >= s.w ? needW : needW + (s.w - needW) * k;
+    const h = needH >= s.h ? needH : needH + (s.h - needH) * k;
+    t.sm = { cx: nx, cy: ny, w, h, at };
+    return { x: nx - w / 2, y: ny - h / 2, w, h };
   }
 
   _flushDelay() {

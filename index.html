@@ -120,7 +120,8 @@
     <button id="maskStart" type="button" class="btn sub wide">名札などを手で隠す（手動ぼかし）</button>
     <p id="maskDoneNote" class="note" hidden></p>
     <div id="maskTools" hidden>
-      <p class="maskHow">隠したい所を<strong>指でなぞって四角く囲んで</strong>ください。囲んだ所は、最初から最後までぼかしが入ります。</p>
+      <p class="maskHow"><strong>「＋ ぼかしを追加」</strong>を押すと、まん中にだ円のぼかしが出ます。<strong>指1本で動かし、2本の指で広げたり縮めたり</strong>できます。隠したい所を指でなぞって囲むこともできます。入れたぼかしは、最初から最後まで入ります。</p>
+      <button id="maskAdd" type="button" class="btn primary wide maskAdd">＋ ぼかしを追加</button>
       <div class="seekRow">
         <button id="maskPlay" type="button" class="btn sub small">再生</button>
         <input id="maskSeek" type="range" min="0" max="1000" value="0" aria-label="場面を選ぶ">
@@ -133,12 +134,16 @@
           <button type="button" data-kind="blur">ぼかし</button>
           <button type="button" data-kind="black">黒塗り</button>
         </div>
+        <div class="seg">
+          <button type="button" data-shape="oval">だ円（顔向き）</button>
+          <button type="button" data-shape="rect">四角（名札向き）</button>
+        </div>
         <div class="seg three">
           <button type="button" id="maskFrom">この場面から</button>
           <button type="button" id="maskTo">この場面まで</button>
           <button type="button" id="maskAll">全体</button>
         </div>
-        <p class="note">囲みは指で動かせます。右下の黄色い丸で大きさを変えられます。人と一緒に動く名札は、<strong>別の場面で囲みを動かす</strong>と、その間はなめらかについていきます。</p>
+        <p class="note">指1本で動かし、2本の指でつまんで大きさを変えられます。右下の黄色い丸を動かすと、縦と横の長さを別々に変えられます。人と一緒に動く名札は、<strong>別の場面で囲みを動かす</strong>と、その間はなめらかについていきます。</p>
         <button type="button" id="maskDel" class="btn danger small">この囲みを消す</button>
       </div>
       <div class="bottomBar two">

@@ -145,6 +145,7 @@ html.camOn, html.camOn body { background: #000; }
 .seekRow .time { font-variant-numeric: tabular-nums; font-size: 14px; min-width: 3.6em; text-align: right; }
 .btn.small { min-height: 44px; padding: 8px 14px; font-size: 15px; }
 .chip.small { min-height: 40px; padding: 6px 14px; font-size: 14px; }
+.maskPanel .maskAdd { font-size: 18px; }
 .maskList { display: flex; flex-wrap: wrap; gap: 8px; }
 .maskList:empty { display: none; }
 .maskSel { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
