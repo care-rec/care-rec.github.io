@@ -129,7 +129,7 @@
       </div>
       <div id="maskList" class="maskList"></div>
       <div id="maskSel" class="maskSel" hidden>
-        <p class="selTitle"><strong id="maskSelName">囲み1</strong>　<span id="maskRange"></span></p>
+        <p class="selTitle"><strong id="maskSelName">囲み1</strong></p>
         <button type="button" id="maskDel" class="btn danger small">この囲みを消す</button>
         <div class="seg">
           <button type="button" data-kind="blur">ぼかし</button>
@@ -141,12 +141,12 @@
         </div>
         <p class="note">指1本で動かし、2本の指でつまんで大きさを変えられます。<strong>右上の赤い×を押すと消せます。</strong>右下の黄色い丸を動かすと、縦と横の長さを別々に変えられます。</p>
 
-        <h4 class="subHead">隠す時間</h4>
+        <h4 class="subHead">隠す時間：<span id="maskRange"></span></h4>
         <div class="maskLine" aria-hidden="true">
           <div class="track"><span id="lineRange" class="rng"></span><span id="lineNow" class="now"></span><span id="lineKeys"></span></div>
           <div class="ends"><span>0:00</span><span id="lineEnd">0:00</span></div>
         </div>
-        <p class="note">緑の帯の間だけ隠します。最初は動画の最初から最後までです。一部の時間だけ隠したいときは、上の再生バーで場面を選んでから押してください。</p>
+        <p class="note">緑の帯の間だけ隠します。最初は動画の最初から最後までです。一部の時間だけ隠したいときは、上の再生バーで場面を選んでから押してください。「今の場面まで隠す」だけを押すと、最初から今の場面まで、「今の場面から隠す」だけを押すと、今の場面から最後まで隠します。</p>
         <div class="seg three">
           <button type="button" id="maskFrom">今の場面から隠す</button>
           <button type="button" id="maskTo">今の場面まで隠す</button>

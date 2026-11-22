@@ -340,8 +340,24 @@ export class RedactEditor {
   // ---- 選んでいる囲みの操作 ----
   setShape(shape) { if (this.sel) { this.sel.shape = shape; this.onChange(); this.draw(); } }
   setKind(kind) { if (this.sel) { this.sel.kind = kind; this.onChange(); this.draw(); } }
-  setFrom() { if (this.sel) { this.sel.from = Math.min(this.time, this.sel.to); this.onChange(); this.draw(); } }
-  setTo() { if (this.sel) { this.sel.to = Math.max(this.time, this.sel.from); this.onChange(); this.draw(); } }
+  // 「今の場面から隠す」：終わりが今より前なら、終わりを動画の最後にする（隠す時間が0にならないように）
+  setFrom() {
+    const m = this.sel;
+    if (!m) return;
+    const t = this.time;
+    m.from = t;
+    if (m.to <= t + 0.05) m.to = this.duration;
+    this.onChange(); this.draw();
+  }
+  // 「今の場面まで隠す」：始まりが今より後なら、始まりを動画の最初にする
+  setTo() {
+    const m = this.sel;
+    if (!m) return;
+    const t = this.time;
+    m.to = t;
+    if (m.from >= t - 0.05) m.from = 0;
+    this.onChange(); this.draw();
+  }
   setAll() { if (this.sel) { this.sel.from = 0; this.sel.to = this.duration; this.onChange(); this.draw(); } }
   removeSel() {
     if (!this.sel) return;
