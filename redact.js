@@ -160,6 +160,15 @@ export class RedactEditor {
         const hr = HANDLE_CSS / 2 / s;
         g.beginPath(); g.arc(r.x + r.w, r.y + r.h, hr, 0, Math.PI * 2);
         g.fillStyle = '#ffd400'; g.fill(); g.lineWidth = 2 / s; g.strokeStyle = '#000'; g.stroke();
+        // 右上の赤い×：押すとこの囲みを消す（画面の下までスクロールしなくても消せるように）
+        if (!this.drag) {
+          const p = this._delPos(r);
+          g.beginPath(); g.arc(p.x, p.y, hr, 0, Math.PI * 2);
+          g.fillStyle = '#d93025'; g.fill(); g.lineWidth = 2 / s; g.strokeStyle = '#fff'; g.stroke();
+          const k = hr * 0.42;
+          g.beginPath(); g.moveTo(p.x - k, p.y - k); g.lineTo(p.x + k, p.y + k); g.moveTo(p.x + k, p.y - k); g.lineTo(p.x - k, p.y + k);
+          g.lineWidth = 3 / s; g.strokeStyle = '#fff'; g.lineCap = 'round'; g.stroke(); g.lineCap = 'butt';
+        }
       }
     }
     if (this.drag && this.drag.mode === 'new') {
@@ -168,6 +177,12 @@ export class RedactEditor {
       ovalPath(g, r); g.stroke();
     }
     g.restore();
+  }
+
+  // 消す×の位置（囲みの右上。画面の外に出るときは内側に寄せる）
+  _delPos(r) {
+    const hr = HANDLE_CSS / 2 / this._scale(), W = this.canvas.width, H = this.canvas.height;
+    return { x: Math.max(hr, Math.min(W - hr, r.x + r.w)), y: Math.max(hr, Math.min(H - hr, r.y)) };
   }
 
   // ドラッグ中は、指で動かしている位置をそのまま見せる
@@ -230,6 +245,11 @@ export class RedactEditor {
     // 選んでいる囲みのつまみ → 大きさを変える
     if (this.sel) {
       const r = rectAt(this.sel, t);
+      // 右上の赤い× → この囲みを消す
+      if (r) {
+        const q = this._delPos(r);
+        if (Math.hypot(p.x - q.x, p.y - q.y) < HANDLE_CSS / s) { this.ptrs.delete(e.pointerId); this.removeSel(); return; }
+      }
       if (r && Math.hypot(p.x - (r.x + r.w), p.y - (r.y + r.h)) < HANDLE_CSS / s) {
         this.drag = { mode: 'size', m: this.sel, p, r0: { ...r }, rect: { ...r } };
         return;
