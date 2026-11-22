@@ -1390,6 +1390,15 @@ export class BlurCamera {
     }
     this._drawLabel(W, H);
     this.shown = { at: e.at, marks: list };
+    // 録画中は「ぼかしなし」にした人の位置を覚えておく（撮影後の探し直しで、その人にぼかしを足さないため）。
+    // 位置と時刻だけで、映像は覚えない
+    if (this.clearLog && now - (this.clearLogLast || 0) >= 100) {
+      const c = list.filter((x) => x.t.clear);
+      if (c.length) {
+        this.clearLogLast = now;
+        this.clearLog.push({ t: (now - this.clearLogAt) / 1000, W, H, r: c.map((x) => ({ x: x.r.x, y: x.r.y, w: x.r.w, h: x.r.h })) });
+      }
+    }
     this.framePool.push(e.f);
   }
 

@@ -8,6 +8,35 @@ import { pickMimeType } from './recorder.js';
 const MIN_SIDE = 16;          // これより小さい囲みは作らない（映像の画素）
 const HANDLE_CSS = 26;        // 大きさを変えるつまみの大きさ（画面上の点）
 const KEY_SNAP = 0.15;        // この秒数以内の場面の位置は、同じ場面として上書きする
+const TRACK_STEP = 0.2;       // 自動で追いかけるとき、何秒ごとに位置を探すか
+const TRACK_OK = 0.5;         // 見た目の似かたがこれ未満になったら、見失ったとして止まる
+
+// 探す範囲 S（sw×sh）の中で、手がかり T（tw×th）といちばん似ている位置（正規化相互相関）
+function ncc(S, sw, sh, T, tw, th) {
+  const n = tw * th;
+  let tm = 0;
+  for (let i = 0; i < n; i++) tm += T[i];
+  tm /= n;
+  let tv = 0;
+  const Tc = new Float32Array(n);
+  for (let i = 0; i < n; i++) { Tc[i] = T[i] - tm; tv += Tc[i] * Tc[i]; }
+  if (tv < 1e-6) return { x: (sw - tw) / 2, y: (sh - th) / 2, score: 0 };
+  let best = { x: 0, y: 0, score: -2 };
+  for (let oy = 0; oy + th <= sh; oy++) {
+    for (let ox = 0; ox + tw <= sw; ox++) {
+      let s = 0, s2 = 0, st = 0;
+      for (let j = 0; j < th; j++) {
+        const row = (oy + j) * sw + ox, trow = j * tw;
+        for (let i = 0; i < tw; i++) { const p = S[row + i]; s += p; s2 += p * p; st += p * Tc[trow + i]; }
+      }
+      const vs = s2 - (s * s) / n;
+      if (vs < 1e-6) continue;
+      const sc = st / Math.sqrt(vs * tv);
+      if (sc > best.score) best = { x: ox, y: oy, score: sc };
+    }
+  }
+  return best;
+}
 
 // ---- 囲みの位置 ----
 export function rectAt(m, t) {
@@ -335,6 +364,82 @@ export class RedactEditor {
     this.sel = m;
     this.onChange();
     this.draw();
+  }
+
+  // 撮影後の探し直しで見つけた顔を、だ円のぼかしとして加える（auto の印を付ける）
+  addFound(list) {
+    for (const f of list) {
+      this.masks.push({ id: this.nextId, no: this.nextId, kind: 'blur', shape: 'oval', auto: true, from: f.from, to: f.to, keys: f.keys.map((k) => ({ ...k })) });
+      this.nextId++;
+    }
+    this.sel = null;
+    this.onChange();
+    this.draw();
+  }
+
+  // ---- 自動で追いかける ----
+  // 選んでいる囲みの「今の場面での見た目」を手がかりに、少しずつ場面を進めながら同じ見た目の場所を探し、
+  // その位置を覚えていく。似た場所が見つからなくなったら（隠れた・裏返ったなど）、そこで止まる。
+  // 戻り値 { cancel(), done: Promise<{ until, lost }> }
+  trackSel({ onProgress } = {}) {
+    const m = this.sel, v = this.video;
+    let cancelled = false;
+    const job = { cancel() { cancelled = true; }, done: null };
+    job.done = (async () => {
+      if (!m) return { until: 0, lost: false };
+      v.pause();
+      const W = v.videoWidth, H = v.videoHeight;
+      const t0 = this.time, end = Math.min(m.to, this.duration || m.to);
+      let r = { ...rectAt(m, t0) || m.keys[0] };
+      setKey(m, t0, r);
+      // 小さく縮めた白黒の絵で比べる（囲みの幅が約40になる大きさ）
+      const sc = Math.min(1, 40 / Math.max(8, r.w));
+      const tw = Math.max(6, Math.round(r.w * sc)), th = Math.max(6, Math.round(r.h * sc));
+      const cv = document.createElement('canvas');
+      const g = cv.getContext('2d', { willReadFrequently: true });
+      const gray = (x, y, w, h, ow, oh) => {
+        if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
+        g.fillStyle = '#808080'; g.fillRect(0, 0, ow, oh);
+        g.drawImage(v, x, y, w, h, 0, 0, ow, oh);
+        const d = g.getImageData(0, 0, ow, oh).data, a = new Float32Array(ow * oh);
+        for (let i = 0; i < a.length; i++) a[i] = d[i * 4] * 0.3 + d[i * 4 + 1] * 0.59 + d[i * 4 + 2] * 0.11;
+        return a;
+      };
+      let tpl = gray(r.x, r.y, r.w, r.h, tw, th);
+      const seek = (t) => new Promise((ok) => {
+        const done = () => { clearTimeout(to); v.removeEventListener('seeked', done); ok(); };
+        const to = setTimeout(done, 2500);
+        v.addEventListener('seeked', done);
+        v.currentTime = t;
+      });
+      let until = t0, lost = false;
+      for (let t = t0 + TRACK_STEP; t <= end + 1e-3; t += TRACK_STEP) {
+        if (cancelled) break;
+        await seek(Math.min(t, end));
+        // 前の位置のまわり（囲みの大きさの0.8倍ぶん）を探す
+        const mx = Math.round(tw * 0.8), my = Math.round(th * 0.8);
+        const sw = tw + mx * 2, sh = th + my * 2;
+        const sx = r.x - mx / sc, sy = r.y - my / sc;
+        const S = gray(sx, sy, sw / sc, sh / sc, sw, sh);
+        const best = ncc(S, sw, sh, tpl, tw, th);
+        if (best.score < TRACK_OK) { lost = true; break; }
+        r = { x: sx + best.x / sc, y: sy + best.y / sc, w: r.w, h: r.h };
+        r.x = Math.max(-r.w / 2, Math.min(W - r.w / 2, r.x)); r.y = Math.max(-r.h / 2, Math.min(H - r.h / 2, r.y));
+        // 前に覚えていた、この場面までの位置は置き換える
+        m.keys = m.keys.filter((k) => k.t <= until + 0.01 || k.t > t + 0.01);
+        setKey(m, Math.min(t, end), r);
+        until = Math.min(t, end);
+        // 見た目が少しずつ変わるのに合わせて、手がかりも少しずつ新しくする
+        const now = gray(r.x, r.y, r.w, r.h, tw, th);
+        for (let i = 0; i < tpl.length; i++) tpl[i] = tpl[i] * 0.85 + now[i] * 0.15;
+        this.draw();
+        if (onProgress) onProgress((until - t0) / Math.max(0.01, end - t0));
+      }
+      this.onChange();
+      this.draw();
+      return { until, lost };
+    })();
+    return job;
   }
 
   // ---- 選んでいる囲みの操作 ----

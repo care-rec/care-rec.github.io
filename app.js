@@ -4,6 +4,7 @@ import { CanvasRecorder, buildFileName, saveVideo } from './recorder.js';
 
 const $ = (id) => document.getElementById(id);
 import { RedactEditor, exportRedacted } from './redact.js';
+import { findMissedFaces } from './rescan.js';
 
 // 場面ごとの、最初から入っている項目。タブごとに並べ替え・削除・追加ができる
 const SETS = [
@@ -184,6 +185,7 @@ $('startCamera').addEventListener('click', async () => {
 });
 
 function leaveCamera() {
+  camera.clearLog = null;
   camera.lock(false);
   camera.stop();
   clearInterval(timerId);
@@ -254,6 +256,7 @@ $('recBtn').addEventListener('click', async () => {
       camera.setLabel(labelText());
       camera.lock(true);
       const { audioOk } = await recorder.start({ audio: micOn });
+      camera.clearLog = []; camera.clearLogAt = performance.now(); camera.clearLogLast = 0;
       btn.classList.add('on');
       btn.setAttribute('aria-label', '録画停止');
       $('recBadge').hidden = false;
@@ -268,9 +271,12 @@ $('recBtn').addEventListener('click', async () => {
     } else {
       const startedDate = new Date(Date.now() - recorder.elapsedMs);
       const { blob, type, durationMs } = await recorder.stop();
+      const clearLog = camera.clearLog || [];
+      camera.clearLog = null;
       btn.setAttribute('aria-label', '録画開始');
       leaveCamera();
       openReview(blob, type, startedDate, durationMs);
+      result.clearLog = clearLog;
     }
   } catch (e) {
     camera.lock(false);
@@ -309,7 +315,9 @@ function openReview(blob, type, date, durationMs) {
   $('againBtn').hidden = true;
   $('saveBtn').disabled = blob.size === 0;
   $('maskStart').disabled = blob.size === 0;
+  $('scanStart').disabled = blob.size === 0;
   $('maskDoneNote').hidden = true;
+  $('scanFoundNote').hidden = true;
   setMaskMode('off');
   if (blob.size === 0) $('saveMsg').textContent = '動画が空でした。この端末では録画がうまくできていません。';
   show('review');
@@ -329,6 +337,8 @@ function setReviewSrc(url) {
 function dropResult() {
   if (!result) return;
   if (exportJob) exportJob.cancel();
+  if (scanJob) scanJob.cancel();
+  if (trackJob) trackJob.cancel();
   const v = $('review');
   v.pause(); v.removeAttribute('src'); v.load();
   URL.revokeObjectURL(result.origUrl);
@@ -341,8 +351,11 @@ function dropResult() {
 // ---- 手動ぼかし ----
 const editor = new RedactEditor({ video: $('review'), canvas: $('maskCanvas'), onChange: renderMaskUi });
 window.__kaigoEditor = editor; // 動作確認用
+window.__kaigoResult = () => result; // 動作確認用
 let exportJob = null;
 let exportLost = false;
+let scanJob = null;    // 撮影後の探し直し
+let trackJob = null;   // 手動ぼかしの自動追いかけ
 
 const fmt = (t) => { t = Math.max(0, t || 0); return `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`; };
 function durSec() {
@@ -350,10 +363,14 @@ function durSec() {
   return Number.isFinite(d) && d > 0 ? d : (result ? result.durationMs / 1000 : 0);
 }
 
-// off：ふつうの確認 ／ edit：囲みを作る ／ busy：作り直し中
+// off：ふつうの確認 ／ edit：囲みを作る ／ busy：反映中 ／ scan：見逃した顔を探している
 function setMaskMode(mode) {
   const v = $('review');
   $('maskStart').hidden = mode !== 'off';
+  $('scanStartBox').hidden = mode !== 'off';
+  $('scanProgress').hidden = mode !== 'scan';
+  if (mode === 'off') $('scanFoundNote').hidden = true;
+  if (mode !== 'edit' && trackJob) trackJob.cancel();
   $('maskTools').hidden = mode !== 'edit';
   $('maskProgress').hidden = mode !== 'busy';
   $('maskCanvas').hidden = mode !== 'edit';
@@ -364,7 +381,10 @@ function setMaskMode(mode) {
   if (mode !== 'edit') editor.close();
 }
 
-$('maskStart').addEventListener('click', async () => {
+$('maskStart').addEventListener('click', () => openEditor());
+
+// 手動ぼかしの画面を開く
+async function openEditor() {
   if (!result) return;
   const v = $('review');
   v.pause();
@@ -380,6 +400,72 @@ $('maskStart').addEventListener('click', async () => {
   setMaskMode('edit');
   editor.open(durSec());
   renderMaskUi();
+}
+
+// ---- 見逃した顔を自動で探す ----
+// 押したその場で始める（iPhoneでは、押した直後でないと動画を扱う準備が許されない）
+$('scanStart').addEventListener('click', () => {
+  if (!result || scanJob) return;
+  $('review').pause();
+  $('scanBar').value = 0;
+  $('scanPct').textContent = '0%';
+  const job = findMissedFaces(result.orig, {
+    camera,
+    clearLog: result.clearLog || [],
+    durationSec: result.durationMs / 1000,
+    onProgress: (p) => { $('scanBar').value = p; $('scanPct').textContent = `${Math.round(p * 100)}%`; },
+  });
+  scanJob = job;
+  setMaskMode('scan');
+  let lock = null;
+  navigator.wakeLock?.request('screen').then((l) => { lock = l; }).catch(() => {});
+  job.done.then(async (found) => {
+    if (!result || scanJob !== job) return;
+    if (!found.length) {
+      setMaskMode('off');
+      $('maskDoneNote').textContent = '見逃した顔は見つかりませんでした。ただし、自動で探しても完全ではありません。保存の前に、最後まで再生して確かめてください。';
+      $('maskDoneNote').hidden = false;
+      return;
+    }
+    await openEditor();
+    editor.masks = editor.masks.filter((m) => !m.auto);   // 前に探した結果は入れ替える
+    editor.addFound(found);
+    $('scanFoundNote').innerHTML = `ぼかしが入っていないかもしれない顔を<strong>${found.length}か所</strong>見つけ、ぼかしを足しました（「見つけた顔」）。<br>再生して確かめ、顔でないものは選んで<strong>右上の赤い×</strong>で消してください。最後に<strong>「反映して確認に戻る」</strong>を押します。`;
+    $('scanFoundNote').hidden = false;
+    const v = $('review');
+    try { v.currentTime = found[0].from + 0.05; } catch (e) { /* 何もしない */ }
+  }).catch(() => {
+    if (!result || scanJob !== job) return;
+    setMaskMode('off');
+    flashReview('探すのを中止しました。');
+  }).finally(() => {
+    if (scanJob === job) scanJob = null;
+    try { lock?.release(); } catch (e) { /* 何もしない */ }
+  });
+});
+$('scanStop').addEventListener('click', () => { if (scanJob) scanJob.cancel(); });
+
+// ---- 手動ぼかしの自動追いかけ ----
+$('maskTrack').addEventListener('click', () => {
+  if (trackJob) { trackJob.cancel(); return; }
+  if (!editor.sel) return;
+  const msg = $('maskTrackMsg');
+  msg.hidden = true;
+  $('maskTrack').textContent = '止める';
+  const job = editor.trackSel();
+  trackJob = job;
+  job.done.then(({ until, lost }) => {
+    msg.textContent = lost
+      ? `${fmt(until)} の少しあとで見失いました。いまの場面で、ぼかしを名札の上に合わせてから、もう一度押してください。`
+      : `${fmt(until)} まで追いかけました。再生して、ずれていないか確かめてください。`;
+    msg.hidden = false;
+  }).catch(() => {
+    msg.textContent = '追いかけられませんでした。手で位置を合わせてください。';
+    msg.hidden = false;
+  }).finally(() => {
+    if (trackJob === job) trackJob = null;
+    $('maskTrack').textContent = 'ここから自動で追いかける';
+  });
 });
 
 function renderMaskUi() {
@@ -390,7 +476,7 @@ function renderMaskUi() {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'chip small' + (m === sel ? ' on' : '');
-    b.textContent = `囲み${m.no}（${m.kind === 'black' ? '黒塗り' : 'ぼかし'}）`;
+    b.textContent = m.auto ? `見つけた顔${m.no}` : `囲み${m.no}（${m.kind === 'black' ? '黒塗り' : 'ぼかし'}）`;
     b.addEventListener('click', () => {
       // 選んだ囲みが見える場面へ移る
       const v = $('review'), t = v.currentTime;
@@ -401,7 +487,7 @@ function renderMaskUi() {
   }
   $('maskSel').hidden = !sel;
   if (sel) {
-    $('maskSelName').textContent = `囲み${sel.no}`;
+    $('maskSelName').textContent = sel.auto ? `見つけた顔${sel.no}` : `囲み${sel.no}`;
     const all = sel.from <= 0.05 && sel.to >= durSec() - 0.05;
     $('maskRange').textContent = all ? '最初から最後まで隠す' : `${fmt(sel.from)} 〜 ${fmt(sel.to)} の間だけ隠す`;
     for (const b of document.querySelectorAll('#maskSel [data-kind]')) b.classList.toggle('on', b.dataset.kind === sel.kind);

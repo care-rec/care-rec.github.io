@@ -117,9 +117,20 @@
 
   <!-- 手動ぼかし：名札や、自動で隠れなかった顔などを指で囲んで隠す -->
   <section id="maskPanel" class="block maskPanel">
+    <div id="scanStartBox">
+      <button id="scanStart" type="button" class="btn sub wide">見逃した顔を自動で探す</button>
+      <p class="note">録った動画を、時間をかけてもう一度調べます。ぼかしが入っていない顔が見つかれば、ぼかしを足します。</p>
+    </div>
     <button id="maskStart" type="button" class="btn sub wide">名札などを手で隠す（手動ぼかし）</button>
     <p id="maskDoneNote" class="note" hidden></p>
+    <div id="scanProgress" hidden>
+      <p class="maskHow"><strong>見逃した顔を探しています。</strong>（まだ保存はされません）<br>動画の長さの1〜3倍くらい時間がかかります。画面を消したり、ほかのアプリに切り替えたりしないでください。</p>
+      <progress id="scanBar" max="1" value="0"></progress>
+      <p id="scanPct" class="note center">0%</p>
+      <button id="scanStop" type="button" class="btn sub wide">中止する</button>
+    </div>
     <div id="maskTools" hidden>
+      <p id="scanFoundNote" class="note foundNote" hidden></p>
       <p class="maskHow"><strong>「＋ ぼかしを追加」</strong>を押すと、まん中にだ円のぼかしが出ます。<strong>指1本で動かし、2本の指で広げたり縮めたり</strong>できます。隠したい所を指でなぞって囲むこともできます。入れたぼかしは、最初から最後まで入ります。いらないぼかしは、選んで<strong>右上の赤い×</strong>で消せます。</p>
       <button id="maskAdd" type="button" class="btn primary wide maskAdd">＋ ぼかしを追加</button>
       <div class="seekRow">
@@ -154,7 +165,10 @@
         </div>
 
         <h4 class="subHead">名札などが動くとき</h4>
-        <p class="note"><strong>ぼかしは、名札や人を自動では追いかけません。</strong>動くものを隠すときは、次をくり返してください。</p>
+        <p class="note">名札の上にぼかしを合わせてから<strong>「ここから自動で追いかける」</strong>を押すと、今の場面から先へ、ぼかしが名札を追いかけます。名札が隠れたり裏返ったりして見失うと、そこで止まります。その場面で指で位置を合わせてから、もう一度押してください。</p>
+        <button type="button" id="maskTrack" class="btn primary wide">ここから自動で追いかける</button>
+        <p id="maskTrackMsg" class="note trackMsg" hidden></p>
+        <p class="note">自動で追いかけられないときは、手で合わせます。次をくり返してください。</p>
         <ol class="note steps">
           <li>上の再生バーで、少し先の場面へ進める</li>
           <li>ぼかしを指で動かして、名札の上に合わせる</li>

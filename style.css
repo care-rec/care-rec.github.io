@@ -206,3 +206,7 @@ html.camOn, html.camOn body { background: #000; }
 .seg.three button { font-size: 14px; padding-left: 4px; padding-right: 4px; }
 .maskLine .rng { min-width: 6px; }
 .maskPanel .applyNote { margin: 4px 0 0; background: #fff7e0; border-radius: 10px; padding: 10px 12px; color: #5a4a12; }
+.maskPanel .foundNote { margin: 0; background: #e6f4f1; border-radius: 10px; padding: 10px 12px; color: #0f4f49; }
+.maskSel .trackMsg { background: #fff7e0; border-radius: 8px; padding: 8px 10px; color: #5a4a12; }
+#scanStartBox { display: grid; gap: 6px; }
+#scanStartBox .note { margin: 0; }
