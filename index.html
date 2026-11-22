@@ -139,12 +139,27 @@
           <button type="button" data-shape="oval">だ円（顔向き）</button>
           <button type="button" data-shape="rect">四角（名札向き）</button>
         </div>
-        <div class="seg three">
-          <button type="button" id="maskFrom">この場面から</button>
-          <button type="button" id="maskTo">この場面まで</button>
-          <button type="button" id="maskAll">全体</button>
+        <p class="note">指1本で動かし、2本の指でつまんで大きさを変えられます。<strong>右上の赤い×を押すと消せます。</strong>右下の黄色い丸を動かすと、縦と横の長さを別々に変えられます。</p>
+
+        <h4 class="subHead">隠す時間</h4>
+        <div class="maskLine" aria-hidden="true">
+          <div class="track"><span id="lineRange" class="rng"></span><span id="lineNow" class="now"></span><span id="lineKeys"></span></div>
+          <div class="ends"><span>0:00</span><span id="lineEnd">0:00</span></div>
         </div>
-        <p class="note">指1本で動かし、2本の指でつまんで大きさを変えられます。<strong>右上の赤い×を押すと消せます。</strong>右下の黄色い丸を動かすと、縦と横の長さを別々に変えられます。人と一緒に動く名札は、<strong>別の場面で囲みを動かす</strong>と、その間はなめらかについていきます。</p>
+        <p class="note">緑の帯の間だけ隠します。最初は動画の最初から最後までです。一部の時間だけ隠したいときは、上の再生バーで場面を選んでから押してください。</p>
+        <div class="seg three">
+          <button type="button" id="maskFrom">今の場面から隠す</button>
+          <button type="button" id="maskTo">今の場面まで隠す</button>
+          <button type="button" id="maskAll">最初から最後まで</button>
+        </div>
+
+        <h4 class="subHead">名札などが動くとき</h4>
+        <p class="note"><strong>ぼかしは、名札や人を自動では追いかけません。</strong>動くものを隠すときは、次をくり返してください。</p>
+        <ol class="note steps">
+          <li>上の再生バーで、少し先の場面へ進める</li>
+          <li>ぼかしを指で動かして、名札の上に合わせる</li>
+        </ol>
+        <p class="note">動かした場面には帯の上に白い点が付きます。点と点の間は、ぼかしがまっすぐなめらかに移ります。動きが曲がるところや速いところは、点を細かく増やしてください。最後に再生して、ずれていないか確かめてください。</p>
       </div>
       <div class="bottomBar two">
         <button id="maskCancel" type="button" class="btn sub">やめる</button>

@@ -193,3 +193,14 @@ html.camOn, html.camOn body { background: #000; }
     padding: max(14px, env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-right, 0px)) max(14px, env(safe-area-inset-bottom, 0px)) 14px;
   }
 }
+
+/* 手動ぼかし：隠す時間の帯と、見出し */
+.maskSel .subHead { margin: 8px 0 0; font-size: 16px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.maskSel .steps { margin: 0; padding-left: 1.6em; }
+.maskSel .steps li { margin: 2px 0; }
+.maskLine .track { position: relative; height: 18px; border-radius: 9px; background: var(--line); overflow: visible; }
+.maskLine .rng { position: absolute; top: 0; bottom: 0; border-radius: 9px; background: var(--accent); }
+.maskLine .now { position: absolute; top: -4px; bottom: -4px; width: 3px; margin-left: -1.5px; background: #d93025; border-radius: 2px; }
+.maskLine .key { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: #fff; border: 2px solid #1d2b28; box-sizing: border-box; }
+.maskLine .ends { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted, #667); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.seg.three button { font-size: 14px; padding-left: 4px; padding-right: 4px; }

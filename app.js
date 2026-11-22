@@ -406,9 +406,30 @@ function renderMaskUi() {
     $('maskRange').textContent = all ? '最初から最後まで隠す' : `${fmt(sel.from)} 〜 ${fmt(sel.to)} の間だけ隠す`;
     for (const b of document.querySelectorAll('#maskSel [data-kind]')) b.classList.toggle('on', b.dataset.kind === sel.kind);
     for (const b of document.querySelectorAll('#maskSel [data-shape]')) b.classList.toggle('on', b.dataset.shape === (sel.shape || 'rect'));
+    renderMaskLine();
   }
   $('maskApply').disabled = !result || (!ms.length && result.blob === result.orig);
   $('maskApply').textContent = !ms.length && result && result.blob !== result.orig ? '手動ぼかしをすべて外す' : '隠して作り直す';
+}
+
+// 「隠す時間」の帯：隠す時間（緑）、位置を決めた場面（白い点）、いまの場面（縦線）
+function renderMaskLine() {
+  const sel = editor.sel, d = durSec();
+  if (!sel || !d) return;
+  const pct = (t) => `${Math.max(0, Math.min(100, (t / d) * 100))}%`;
+  const rng = $('lineRange');
+  rng.style.left = pct(sel.from);
+  rng.style.width = `calc(${pct(sel.to)} - ${pct(sel.from)})`;
+  $('lineNow').style.left = pct($('review').currentTime);
+  $('lineEnd').textContent = fmt(d);
+  const keys = $('lineKeys');
+  keys.textContent = '';
+  for (const k of sel.keys) {
+    const s = document.createElement('span');
+    s.className = 'key';
+    s.style.left = pct(k.t);
+    keys.appendChild(s);
+  }
 }
 
 for (const b of document.querySelectorAll('#maskSel [data-kind]')) b.addEventListener('click', () => editor.setKind(b.dataset.kind));
@@ -432,6 +453,7 @@ $('maskSeek').addEventListener('input', (e) => {
     const d = durSec();
     $('maskTime').textContent = fmt(v.currentTime);
     if (d && document.activeElement !== $('maskSeek')) $('maskSeek').value = String(Math.round((v.currentTime / d) * 1000));
+    if (editor.sel) $('lineNow').style.left = `${Math.max(0, Math.min(100, (v.currentTime / (d || 1)) * 100))}%`;
   };
   for (const ev of ['timeupdate', 'seeked', 'loadedmetadata']) v.addEventListener(ev, sync);
   v.addEventListener('play', () => { $('maskPlay').textContent = '一時停止'; });
