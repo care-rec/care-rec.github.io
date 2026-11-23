@@ -2,11 +2,14 @@
 // - 色も比べる（赤い名札など、白黒では背景や肌と見分けにくいものも追える）
 // - 囲みのまん中ほど重く見る（囲みが名札より大きく、背景が多く入っていても、背景につられにくい）
 // - 前の動きから行き先を予想し、広めに探す（手で持って速く動かしても追いつく）
+// - 形が合わないとき（回った・手で一部隠れた）は、その物にだけある色が集まっている所を追う
 // - 見失ったら、無理に探さずに止まる（別の場所へ飛んで黙ってずれるのを防ぐ）
 // 映像はこのスマホの中だけで処理し、どこにも送らない。
 
 const SIZE = 48;          // 囲みの長い辺をこの大きさに縮めて比べる
 const OK = 0.45;          // これ未満は「似ていない」
+const SURE = 0.7;          // 形の比べ方でこれ以上似ていれば、そのまま信じる
+const COLOR_OK = 0.55;     // 色の手がかりで「その物らしさ」が最初のこの割合以上あれば、そこにあるとみなす
 const JUMP_OK = 0.7;       // 予想から大きく離れた所へ移るのに要る似かた
 const LEARN = 0.72;       // これ以上よく似ていたら、手がかりを少し新しくする
 
@@ -79,6 +82,23 @@ function half(A, w, h) {
   return { B, hw, hh };
 }
 
+// ---- 色の手がかり ----
+// 色を 8×8×8 に分けた番号
+const bin = (r, g, b) => ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+// 囲みの中にはよく出て、まわりには少ない色ほど 1 に近い「その物らしさ」の表を作る
+function colorTable(inside, W, ring) {
+  const q = new Float32Array(512), bg = new Float32Array(512);
+  let qs = 0, bs = 0;
+  for (let i = 0; i < W.length; i++) { const k = W[i]; q[bin(inside[i * 3], inside[i * 3 + 1], inside[i * 3 + 2])] += k; qs += k; }
+  for (let i = 0; i < ring.length; i += 3) { bg[bin(ring[i], ring[i + 1], ring[i + 2])] += 1; bs += 1; }
+  const p = new Float32Array(512);
+  for (let c = 0; c < 512; c++) {
+    const a = q[c] / Math.max(1, qs), b = bg[c] / Math.max(1, bs);
+    p[c] = a > 0 ? a / (a + b * 1.5 + 1e-4) : 0;
+  }
+  return p;
+}
+
 export class PatchTracker {
   // video：映像。r：今の場面での囲み（映像の画素）。t：今の時刻
   constructor(video, r, t) {
@@ -94,6 +114,44 @@ export class PatchTracker {
     this.init = grab(video, r.x, r.y, r.w, r.h, this.tw, this.th);
     this.run = this.init.slice();
     this._setTemplate(this.init);
+    // 色の手がかり：囲みの中と、まわり（囲みの3倍の範囲）の色を比べる
+    const R = grab(video, r.x - r.w, r.y - r.h, r.w * 3, r.h * 3, this.tw * 3, this.th * 3);
+    const ring = [];
+    for (let y = 0; y < this.th * 3; y++) for (let x = 0; x < this.tw * 3; x++) {
+      if (x >= this.tw && x < this.tw * 2 && y >= this.th && y < this.th * 2) continue;
+      const i = (y * this.tw * 3 + x) * 3;
+      ring.push(R[i], R[i + 1], R[i + 2]);
+    }
+    this.prob = colorTable(this.init, this.W, ring);
+    this.probBase = this._probMean(this.init, this.tw, this.th, 0, 0) || 1e-3;
+  }
+
+  // 範囲 S の (ox,oy) から tw×th の窓の中の「その物らしさ」の平均
+  _probMean(S, sw, sh, ox, oy) {
+    let s = 0, n = 0;
+    for (let y = Math.max(0, oy); y < Math.min(sh, oy + this.th); y++) for (let x = Math.max(0, ox); x < Math.min(sw, ox + this.tw); x++) {
+      const i = (y * sw + x) * 3;
+      s += this.prob[bin(S[i], S[i + 1], S[i + 2])]; n++;
+    }
+    return n ? s / n : 0;
+  }
+
+  // 色の手がかりで、その物らしい色が集まっている所へ窓を寄せていく（形が変わっても、回っても追える）
+  _meanShift(S, sw, sh, ox, oy) {
+    const tw = this.tw, th = this.th;
+    for (let it = 0; it < 12; it++) {
+      let sx = 0, sy = 0, sw8 = 0;
+      for (let y = Math.max(0, oy); y < Math.min(sh, oy + th); y++) for (let x = Math.max(0, ox); x < Math.min(sw, ox + tw); x++) {
+        const i = (y * sw + x) * 3, p = this.prob[bin(S[i], S[i + 1], S[i + 2])];
+        if (p < 0.3) continue;
+        sx += p * x; sy += p * y; sw8 += p;
+      }
+      if (sw8 < 1e-3) break;
+      const nx = Math.round(sx / sw8 - tw / 2), ny = Math.round(sy / sw8 - th / 2);
+      if (Math.abs(nx - ox) < 1 && Math.abs(ny - oy) < 1) break;
+      ox = nx; oy = ny;
+    }
+    return { x: ox, y: oy, conf: this._probMean(S, sw, sh, ox, oy) / this.probBase };
   }
 
   _setTemplate(T) {
@@ -116,9 +174,22 @@ export class PatchTracker {
     const S2 = half(S, sw, sh);
     const c = search(S2.B, S2.hw, S2.hh, this.P2, this.W2, tw >> 1, th >> 1);
     let best = search(S, sw, sh, this.P, this.W, tw, th, { x0: c.x * 2 - 3, x1: c.x * 2 + 3, y0: c.y * 2 - 3, y1: c.y * 2 + 3 });
-    const nx = sx + best.x / sc, ny = sy + best.y / sc;
+    let nx = sx + best.x / sc, ny = sy + best.y / sc;
+    // 形の比べ方で自信がないときは、色の手がかりで探す（名札が回った・手で一部隠れた、など）
+    let byColor = false;
+    if (best.score < SURE) {
+      // 予想した行き先と、形の比べ方で見つけた所の両方から寄せてみて、よりその物らしい方をとる
+      let ms = this._meanShift(S, sw, sh, Math.round((px - sx) * sc), Math.round((py - sy) * sc));
+      if (best.score >= OK) { const m2 = this._meanShift(S, sw, sh, best.x, best.y); if (m2.conf > ms.conf) ms = m2; }
+      if (ms.conf >= COLOR_OK) {
+        nx = sx + ms.x / sc; ny = sy + ms.y / sc;
+        best = { score: Math.max(best.score, OK), color: ms.conf };
+        byColor = true;
+      }
+    }
     // 予想した行き先から大きく離れた所は、よほどよく似ていなければ信じない（背景などへ飛んで、黙ってずれるのを防ぐ）
-    if (best.score >= OK && Math.min(Math.hypot(nx - px, ny - py), Math.hypot(nx - r.x, ny - r.y)) > Math.max(r.w, r.h) * 0.6 && best.score < JUMP_OK) best.score = 0;
+    if (globalThis.__trackLog) globalThis.__trackLog.push({ t: +t.toFixed(2), s: +best.score.toFixed(3), c: best.color ? +best.color.toFixed(2) : undefined, d: +(Math.min(Math.hypot(nx - px, ny - py), Math.hypot(nx - r.x, ny - r.y)) / Math.max(r.w, r.h)).toFixed(2) });   // 動作確認用
+    if (!byColor && best.score >= OK && Math.min(Math.hypot(nx - px, ny - py), Math.hypot(nx - r.x, ny - r.y)) > Math.max(r.w, r.h) * 0.6 && best.score < JUMP_OK) best.score = 0;
     // 似た場所が見つからなければ、見失ったとして止まる（画面全体から探し直すと、模様の少ない所では
     // 別の場所へ飛んでしまい、黙ってずれるほうが危ないため）
     if (best.score < OK) return null;
@@ -127,14 +198,14 @@ export class PatchTracker {
     this.r = { x: nx, y: ny, w: r.w, h: r.h };
     this.t = t;
     // よく似ていたら、見た目の変化に合わせて手がかりを少し新しくする（最初の見た目も半分残す）
-    if (best.score >= LEARN) {
+    if (best.score >= LEARN && !byColor) {
       const now = grab(v, nx, ny, r.w, r.h, tw, th);
       for (let i = 0; i < now.length; i++) this.run[i] = this.run[i] * 0.85 + now[i] * 0.15;
       const T = new Float32Array(now.length);
       for (let i = 0; i < T.length; i++) T[i] = (this.init[i] + this.run[i]) / 2;
       this._setTemplate(T);
     }
-    return { r: this.r, score: best.score };
+    return { r: this.r, score: best.score, byColor };
   }
 }
 
