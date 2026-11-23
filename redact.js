@@ -9,7 +9,8 @@ import { PatchTracker, seekFrame } from './track.js';
 const MIN_SIDE = 16;          // これより小さい囲みは作らない（映像の画素）
 const HANDLE_CSS = 26;        // 大きさを変えるつまみの大きさ（画面上の点）
 const KEY_SNAP = 0.15;        // この秒数以内の場面の位置は、同じ場面として上書きする
-const TRACK_STEP = 0.1;       // 自動で追いかけるとき、何秒ごとに位置を探すか
+const TRACK_STEP = 0.1;       // 自動で追いかけるとき、何秒ごとに位置を覚えるか
+const TRACK_RATE = 0.5;       // 自動で追いかけるときの再生の速さ（ゆっくり再生しながら、映ったコマごとに追いかける）
 
 // ---- 囲みの位置 ----
 export function rectAt(m, t) {
@@ -366,22 +367,66 @@ export class RedactEditor {
       let r = { ...rectAt(m, t0) || m.keys[0] };
       setKey(m, t0, r);
       const tracker = new PatchTracker(v, r, t0);
-      const seek = (t) => seekFrame(v, t);
-      let until = t0, lost = false;
-      for (let t = t0 + TRACK_STEP; t <= end + 1e-3; t += TRACK_STEP) {
-        if (cancelled) break;
-        await seek(Math.min(t, end));
-        const res = tracker.update(Math.min(t, end));
-        if (!res) { lost = true; break; }
+      let until = t0, lost = false, lastKey = t0;
+      // 1つの場面の結果を受け取る。見失ったら false
+      const accept = (t, res) => {
+        if (!res) { lost = true; return false; }
         r = { ...res.r };
         r.x = Math.max(-r.w / 2, Math.min(W - r.w / 2, r.x)); r.y = Math.max(-r.h / 2, Math.min(H - r.h / 2, r.y));
-        // 前に覚えていた、この場面までの位置は置き換える
-        m.keys = m.keys.filter((k) => k.t <= until + 0.01 || k.t > t + 0.01);
-        m.keys.push({ t: Math.min(t, end), x: r.x, y: r.y, w: r.w, h: r.h });   // 0.1秒ごとなので、近い場面の上書きはしない
-        m.keys.sort((a, b) => a.t - b.t);
-        until = Math.min(t, end);
-        this.draw();
+        until = t;
+        // 位置は0.1秒ごとに覚える（前に覚えていた、この場面までの位置は置き換える）
+        if (t - lastKey >= TRACK_STEP - 0.005 || t >= end - 0.005) {
+          m.keys = m.keys.filter((k) => k.t <= lastKey + 0.01 || k.t > t + 0.01);
+          m.keys.push({ t, x: r.x, y: r.y, w: r.w, h: r.h });   // 0.1秒ごとなので、近い場面の上書きはしない
+          m.keys.sort((p, q) => p.t - q.t);
+          lastKey = t;
+        }
         if (onProgress) onProgress((until - t0) / Math.max(0.01, end - t0));
+        return true;
+      };
+      if (v.requestVideoFrameCallback) {
+        // ゆっくり再生しながら、実際に映ったコマごとに追いかける。
+        // 場面を飛び飛びに移す方法は、iPhone では近くの区切りのコマにまとめられてしまい、追いつけないことがあるため
+        const muted = v.muted, rate = v.playbackRate;
+        v.muted = true;
+        v.playbackRate = TRACK_RATE;
+        try {
+          await new Promise((done) => {
+            let fin = false, lastT = t0;
+            const finish = () => { if (!fin) { fin = true; clearInterval(wd); done(); } };
+            let stuck = performance.now();
+            const wd = setInterval(() => { if (cancelled || performance.now() - stuck > 4000) finish(); }, 300);
+            const step = (_now, meta) => {
+              if (fin) return;
+              if (cancelled) return finish();
+              const t = Math.min(end, meta && typeof meta.mediaTime === 'number' ? meta.mediaTime : v.currentTime);
+              if (t > lastT + 0.02) {
+                stuck = performance.now();
+                lastT = t;
+                if (!accept(t, tracker.update(t))) return finish();
+              }
+              if (t >= end - 0.02 || v.ended) return finish();
+              v.requestVideoFrameCallback(step);
+            };
+            v.requestVideoFrameCallback(step);
+            v.addEventListener('ended', finish, { once: true });
+            v.play().catch(() => finish());
+          });
+        } finally {
+          v.pause();
+          v.playbackRate = rate;
+          v.muted = muted;
+        }
+        // 止まった場面（見失った所、または最後）を見せる
+        await seekFrame(v, until);
+      } else {
+        for (let t = t0 + TRACK_STEP; t <= end + 1e-3; t += TRACK_STEP) {
+          if (cancelled) break;
+          const tt = Math.min(t, end);
+          await seekFrame(v, tt);
+          if (!accept(tt, tracker.update(tt))) break;
+          this.draw();
+        }
       }
       this.onChange();
       this.draw();
