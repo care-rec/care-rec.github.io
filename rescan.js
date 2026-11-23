@@ -5,6 +5,7 @@
 // - 撮影中に「ぼかしなし」にした人の位置（clearLog）も候補にしない
 // 映像はこのスマホの中だけで処理し、どこにも送らない。結果は位置と時刻だけ。
 import { YuNetDetector } from './yunet.js';
+import { seekFrame } from './track.js';
 
 const STEP = 0.3;            // 何秒ごとの場面を調べるか
 const Y_OK = 0.62;           // まっすぐの向きの合格点
@@ -90,12 +91,7 @@ export function findMissedFaces(blob, { camera, clearLog = [], durationSec = 0, 
       const g = c.getContext('2d', { willReadFrequently: true });
       const flip = document.createElement('canvas'); flip.width = W; flip.height = H;
       const fg = flip.getContext('2d');
-      const seek = (t) => new Promise((r) => {
-        const done = () => { clearTimeout(to); v.removeEventListener('seeked', done); r(); };
-        const to = setTimeout(done, 2500);
-        v.addEventListener('seeked', done);
-        v.currentTime = t;
-      });
+      const seek = (t) => seekFrame(v, t);
       const samples = [];
       for (let t = 0.05; t < dur - 0.02; t += STEP) {
         if (cancelled) throw new Error('cancelled');
