@@ -131,14 +131,20 @@
     </div>
     <div id="maskTools" hidden>
       <p id="scanFoundNote" class="note foundNote" hidden></p>
-      <p class="maskHow"><strong>「＋ ぼかしを追加」</strong>を押すと、まん中にだ円のぼかしが出ます。<strong>指1本で動かし、2本の指で広げたり縮めたり</strong>できます。隠したい所を指でなぞって囲むこともできます。入れたぼかしは、最初から最後まで入ります。いらないぼかしは、選んで<strong>右上の赤い×</strong>で消せます。</p>
       <button id="maskAdd" type="button" class="btn primary wide maskAdd">＋ ぼかしを追加</button>
       <div class="seekRow">
         <button id="maskPlay" type="button" class="btn sub small">再生</button>
         <input id="maskSeek" type="range" min="0" max="1000" value="0" aria-label="場面を選ぶ">
         <span id="maskTime" class="time">0:00</span>
       </div>
+      <div id="trackBox" class="trackBox" hidden>
+        <button type="button" id="maskTrack" class="btn primary wide">このぼかしを自動で追いかける</button>
+        <p class="note">名札など動くものの上にぼかしを合わせてから押すと、今の場面から先へ、ぼかしがついていきます（動かないものなら押さなくてかまいません）。</p>
+        <p id="maskTrackMsg" class="note trackMsg" hidden></p>
+      </div>
       <div id="maskList" class="maskList"></div>
+      <p class="maskHow"><strong>「＋ ぼかしを追加」</strong>を押すと、まん中にだ円のぼかしが出ます。<strong>指1本で動かし、2本の指で広げたり縮めたり</strong>できます。隠したい所を指でなぞって囲むこともできます。入れたぼかしは、最初から最後まで入ります。いらないぼかしは、選んで<strong>右上の赤い×</strong>で消せます。</p>
+
       <div id="maskSel" class="maskSel" hidden>
         <p class="selTitle"><strong id="maskSelName">囲み1</strong></p>
         <button type="button" id="maskDel" class="btn danger small">この囲みを消す</button>
@@ -165,9 +171,7 @@
         </div>
 
         <h4 class="subHead">名札などが動くとき</h4>
-        <p class="note">名札の上にぼかしを合わせてから<strong>「ここから自動で追いかける」</strong>を押すと、今の場面から先へ、ぼかしが名札を追いかけます。名札が隠れたり裏返ったりして見失うと、そこで止まります。その場面で指で位置を合わせてから、もう一度押してください。</p>
-        <button type="button" id="maskTrack" class="btn primary wide">ここから自動で追いかける</button>
-        <p id="maskTrackMsg" class="note trackMsg" hidden></p>
+        <p class="note">ぼかしは、置いただけでは動きません。名札の上にぼかしを合わせてから、動画のすぐ下の<strong>「このぼかしを自動で追いかける」</strong>を押すと、今の場面から先へ、ぼかしが名札を追いかけます。名札が隠れたり裏返ったりして見失うと、そこで止まります。その場面で指で位置を合わせてから、もう一度押してください。</p>
         <p class="note">自動で追いかけられないときは、手で合わせます。次をくり返してください。</p>
         <ol class="note steps">
           <li>上の再生バーで、少し先の場面へ進める</li>

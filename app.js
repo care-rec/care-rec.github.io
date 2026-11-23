@@ -450,9 +450,12 @@ $('maskTrack').addEventListener('click', () => {
   if (trackJob) { trackJob.cancel(); return; }
   if (!editor.sel) return;
   const msg = $('maskTrackMsg');
-  msg.hidden = true;
   $('maskTrack').textContent = '止める';
-  const job = editor.trackSel();
+  // 追いかける様子が見えるように、動画が画面に入る位置まで戻す
+  $('reviewWrap').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  msg.textContent = '追いかけています…（「止める」で途中で止められます）';
+  msg.hidden = false;
+  const job = editor.trackSel({ onProgress: () => { msg.textContent = `追いかけています… ${fmt($('review').currentTime)}（「止める」で途中で止められます）`; } });
   trackJob = job;
   job.done.then(({ until, lost }) => {
     msg.textContent = lost
@@ -464,7 +467,7 @@ $('maskTrack').addEventListener('click', () => {
     msg.hidden = false;
   }).finally(() => {
     if (trackJob === job) trackJob = null;
-    $('maskTrack').textContent = 'ここから自動で追いかける';
+    $('maskTrack').textContent = 'このぼかしを自動で追いかける';
   });
 });
 
@@ -486,6 +489,7 @@ function renderMaskUi() {
     list.appendChild(b);
   }
   $('maskSel').hidden = !sel;
+  $('trackBox').hidden = !sel;
   if (sel) {
     $('maskSelName').textContent = sel.auto ? `見つけた顔${sel.no}` : `囲み${sel.no}`;
     const all = sel.from <= 0.05 && sel.to >= durSec() - 0.05;
