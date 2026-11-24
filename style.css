@@ -1,10 +1,16 @@
+/* 丸ゴシック（M PLUS Rounded 1c、日本語の常用の文字だけに絞ってアプリに同梱。外部には読みに行かない） */
+@font-face { font-family: "CareRound"; src: url("fonts/mplus-rounded-Medium.woff2") format("woff2"); font-weight: 100 600; font-display: swap; }
+@font-face { font-family: "CareRound"; src: url("fonts/mplus-rounded-ExtraBold.woff2") format("woff2"); font-weight: 700 900; font-display: swap; }
 :root {
-  --bg: #f3f7f6;
+  --bg: #fbf6ef;
   --card: #ffffff;
-  --fg: #16292c;
-  --muted: #5b6f72;
-  --line: #d5e0de;
-  --accent: #0f766e;
+  --fg: #4a3428;
+  --muted: #7f6252;
+  --line: #eedccb;
+  --accent: #c2603a;
+  --accent-dark: #8f3f1f;
+  --accent-soft: #fde9dc;
+  --switch: #7fb069;
   --accent-fg: #ffffff;
   --danger: #b42318;
   --rec: #e5352b;
@@ -13,7 +19,7 @@
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  font-family: "CareRound", "Hiragino Maru Gothic ProN", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
   font-size: 17px; line-height: 1.6;
   -webkit-text-size-adjust: 100%;
 }
@@ -220,3 +226,50 @@ html.camOn, html.camOn body { background: #000; }
 .maskPanel .howTo summary { cursor: pointer; font-weight: 700; color: var(--accent); padding: 4px 0; }
 .maskPanel .howTo h4 { margin: 10px 0 2px; font-size: 15px; }
 .maskPanel .howTo p { margin: 0 0 6px; font-size: 14px; line-height: 1.6; }
+
+/* ===== v28 ホーム画面：やさしい手帳の色＋イラスト付きタイル ===== */
+.top h1 { font-size: 28px; font-weight: 800; color: var(--accent); }
+.top h1 .ruby { font-weight: 500; }
+.tagline { color: #a64b28; font-weight: 800; }
+.block { border: 0; border-radius: 18px; box-shadow: 0 2px 0 var(--line); }
+.block h2 { font-weight: 800; }
+.tabs { background: #f3e6d8; border-radius: 14px; }
+.tab { border-radius: 11px; color: var(--muted); }
+.tab.on { box-shadow: 0 1px 3px rgba(120,60,20,.18); }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.tiles > .note { grid-column: 1 / -1; }
+.tile {
+  position: relative; font: inherit; font-size: 14px; font-weight: 800; line-height: 1.3; color: var(--fg);
+  background: #fff; border: 2px solid #f0e2d3; border-radius: 16px; padding: 6px 4px 9px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.tile img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 10px; pointer-events: none; }
+.tile span { word-break: break-all; }
+.tile:active { transform: scale(.97); }
+.tile.on { border-color: var(--accent); background: var(--accent-soft); color: #a64b28; }
+.tile.on img { mix-blend-mode: multiply; }
+.tile.on::after {
+  content: "✓"; position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--accent); color: #fff; font-size: 14px; display: grid; place-items: center; border: 2px solid var(--bg);
+}
+/* スイッチ（チェックの四角を、横にすべるスイッチの形に） */
+.switchRow input[type=checkbox] {
+  -webkit-appearance: none; appearance: none; width: 52px; height: 32px; border-radius: 16px; margin: 0;
+  background: #dccbbb; position: relative; cursor: pointer; transition: background .2s;
+}
+.switchRow input[type=checkbox]::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .2s;
+}
+.switchRow input[type=checkbox]:checked { background: var(--switch); }
+.switchRow input[type=checkbox]:checked::after { left: 23px; }
+.switchRow strong { font-weight: 800; }
+/* 撮影するボタン */
+.btn { border-radius: 26px; }
+.btn.primary { box-shadow: 0 5px 0 var(--accent-dark); }
+.btn.primary:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 2px 0 var(--accent-dark); }
+.btn.primary:disabled { box-shadow: none; }
+.help summary { font-weight: 800; }
+.maskPanel .foundNote { background: #fdeee3; color: #7a3a1d; }
+.maskPanel .howTo { background: #fffaf4; }

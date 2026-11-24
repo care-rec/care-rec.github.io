@@ -1,7 +1,7 @@
 // 通信がなくても起動できるように、アプリの部品をスマホの中に保存しておく仕組み（サービスワーカー）。
 // 撮影した映像はここでは一切扱わない。保存するのはアプリの部品だけ。
 
-const VERSION = 'v27';
+const VERSION = 'v28';
 const CACHE = 'kaigo-camera-' + VERSION;   // 名前を変えると古い保存分が消えなくなるので、接頭辞はそのまま
 
 // 最初に開いたときに、まとめて保存する部品
@@ -37,10 +37,32 @@ const PRECACHE = [
   './vendor/ort/ort-wasm-simd-threaded.wasm',
   './vendor/yunet/face_detection_yunet_2023mar.onnx',
   './vendor/pose/pose_landmarker_lite.task',
+  './fonts/mplus-rounded-Medium.woff2',
+  './fonts/mplus-rounded-ExtraBold.woff2',
+  './img/care/suction.webp',
+  './img/care/diaper.webp',
+  './img/care/peg.webp',
+  './img/care/dressing.webp',
+  './img/care/wheelchair.webp',
+  './img/care/turning.webp',
+  './img/care/meal.webp',
+  './img/care/oral.webp',
+  './img/care/medicine.webp',
+  './img/care/walk.webp',
+  './img/care/standup.webp',
+  './img/care/selftrain.webp',
+  './img/care/swallow.webp',
+  './img/care/rom.webp',
+  './img/care/stairs.webp',
+  './img/care/handover.webp',
+  './img/care/bath.webp',
+  './img/care/pressure.webp',
+  './img/care/practice.webp',
+  './img/care/other.webp',
 ];
 
 // 保存してよい種類（動画などは保存しない）
-const KEEP = /\.(html|css|js|mjs|json|png|wasm|tflite|bin|onnx|task)$/i;
+const KEEP = /\.(html|css|js|mjs|json|png|wasm|tflite|bin|onnx|task|webp|woff2)$/i;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

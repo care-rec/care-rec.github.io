@@ -14,6 +14,14 @@ const SETS = [
   { id: 'home', name: '訪問ケア', items: ['申し送り', '吸引', '胃ろう注入', 'オムツ交換', '入浴介助', '褥瘡ケア', '服薬介助'] },
   { id: 'staff', name: '院内・教育', items: ['申し送り', '手技練習', '体位変換', '吸引', '車いす移乗', '口腔ケア'] },
 ];
+// 項目ごとのイラスト。一覧にない項目（自分で追加したもの）は other を使う
+const ICONS = {
+  '吸引': 'suction', 'オムツ交換': 'diaper', '胃ろう注入': 'peg', '着替え': 'dressing', '車いす移乗': 'wheelchair',
+  '体位変換': 'turning', '食事介助': 'meal', '口腔ケア': 'oral', '服薬介助': 'medicine', '歩行': 'walk',
+  '立ち上がり': 'standup', '自主トレ': 'selftrain', '嚥下訓練': 'swallow', '関節可動域訓練': 'rom', '階段昇降': 'stairs',
+  '申し送り': 'handover', '入浴介助': 'bath', '褥瘡ケア': 'pressure', '手技練習': 'practice',
+};
+const iconFor = (name) => `img/care/${ICONS[name] || 'other'}.webp`;
 const KEY_SETS = 'kaigoCamera.titleSets';
 const KEY_TAB = 'kaigoCamera.titleTab';
 const KEY_OLD = 'kaigoCamera.customTitles';   // 前の版で追加した項目
@@ -70,8 +78,13 @@ function renderTitles() {
   for (const name of items) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'chip' + (name === selected ? ' on' : '');
-    b.textContent = name;
+    b.className = 'tile' + (name === selected ? ' on' : '');
+    b.setAttribute('aria-pressed', String(name === selected));
+    const img = document.createElement('img');
+    img.src = iconFor(name); img.alt = ''; img.decoding = 'async';
+    const label = document.createElement('span');
+    label.textContent = name;
+    b.append(img, label);
     b.addEventListener('click', () => { selected = name; renderTitles(); });
     list.appendChild(b);
   }
@@ -653,7 +666,7 @@ $('saveBtn').addEventListener('click', async () => {
 });
 
 // ---- 版の表示（いま動いている版を確かめられるように。sw.js の VERSION と同じにする） ----
-const APP_VERSION = 'v27';
+const APP_VERSION = 'v28';
 $('appVer').textContent = `ケアREC ${APP_VERSION}`;
 
 // ---- 通信がなくても起動できるようにする ----
