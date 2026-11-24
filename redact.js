@@ -5,7 +5,7 @@
 // 映像はこのスマホの中だけで処理し、どこにも送らない。
 import { pickMimeType } from './recorder.js';
 import { PatchTracker, seekFrame } from './track.js';
-import { fixMp4Duration } from './mp4fix.js';
+import { normalizeMp4 } from './mp4plain.js';
 
 const MIN_SIDE = 16;          // これより小さい囲みは作らない（映像の画素）
 const HANDLE_CSS = 26;        // 大きさを変えるつまみの大きさ（画面上の点）
@@ -573,7 +573,7 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       // 最後まで読めずに途中で終わった動画は渡さない（短くなった動画を保存してしまわないため）
       if (durationSec && reached < durationSec - 1.5) throw new Error('short');
       const type = (rec.mimeType || chunks[0]?.type || 'video/mp4').split(';')[0];
-      const out = await fixMp4Duration(new Blob(chunks, { type }), reached);
+      const out = await normalizeMp4(new Blob(chunks, { type }), reached);
       return { blob: out, type };
     } finally {
       try { if (rec && rec.state !== 'inactive') rec.stop(); } catch (e) { /* 何もしない */ }

@@ -5,7 +5,7 @@ import { CanvasRecorder, buildFileName, saveVideo } from './recorder.js';
 const $ = (id) => document.getElementById(id);
 import { RedactEditor, exportRedacted } from './redact.js';
 import { findMissedFaces } from './rescan.js';
-import { fixMp4Duration } from './mp4fix.js';
+import { normalizeMp4 } from './mp4plain.js';
 
 // 場面ごとの、最初から入っている項目。タブごとに並べ替え・削除・追加ができる
 const SETS = [
@@ -273,8 +273,8 @@ $('recBtn').addEventListener('click', async () => {
       const startedDate = new Date(Date.now() - recorder.elapsedMs);
       const rec = await recorder.stop();
       const { type, durationMs } = rec;
-      // 録画した mp4 に正しい長さを書き込む（iPhone が長さを読み違えて、途中までしか扱えなくなるのを防ぐ）
-      const blob = /mp4/.test(type) ? await fixMp4Duration(rec.blob, durationMs / 1000) : rec.blob;
+      // 録画した mp4 を、ふつうの1本の mp4 に組み直す（iPhone が長さを読み違えて、途中までしか扱えなくなるのを防ぐ）
+      const blob = /mp4/.test(type) ? await normalizeMp4(rec.blob, durationMs / 1000) : rec.blob;
       const clearLog = camera.clearLog || [];
       camera.clearLog = null;
       btn.setAttribute('aria-label', '録画開始');
@@ -645,7 +645,7 @@ $('saveBtn').addEventListener('click', async () => {
 });
 
 // ---- 版の表示（いま動いている版を確かめられるように。sw.js の VERSION と同じにする） ----
-const APP_VERSION = 'v25';
+const APP_VERSION = 'v26';
 $('appVer').textContent = `ケアREC ${APP_VERSION}`;
 
 // ---- 通信がなくても起動できるようにする ----
