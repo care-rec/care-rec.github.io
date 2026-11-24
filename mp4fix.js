@@ -24,7 +24,8 @@ function children(v, start, end) {
 }
 const find = (list, t) => list.find((b) => b.t === t);
 
-export async function fixMp4Duration(blob) {
+// expectedSec：録画した時間（アプリで測ったもの）。計算した長さがこれと大きく違うときは、こちらを使う
+export async function fixMp4Duration(blob, expectedSec = 0) {
   try {
     const buf = await blob.arrayBuffer();
     const v = new DataView(buf);
@@ -48,7 +49,7 @@ export async function fixMp4Duration(blob) {
       const tkV = v.getUint8(tkhd.o + 8), mdV = v.getUint8(mdhd.o + 8);
       const id = u32(v, tkhd.o + 8 + (tkV === 1 ? 20 : 12));
       const scale = u32(v, mdhd.o + 8 + (mdV === 1 ? 20 : 12));
-      tracks.set(id, { tkhd, tkV, mdhd, mdV, scale, defDur: 0, end: 0 });
+      tracks.set(id, { tkhd, tkV, mdhd, mdV, scale, defDur: 0, end: 0, start: Infinity });
     }
     for (const tx of children(v, mvex.o + 8, mvex.o + mvex.size).filter((b) => b.t === 'trex')) {
       const t = tracks.get(u32(v, tx.o + 12));
@@ -83,10 +84,19 @@ export async function fixMp4Duration(blob) {
           for (let i = 0; i < n; i++) sum += (tfl & 0x100) ? u32(v, q + i * per) : def;
         }
         t.end = Math.max(t.end, base + sum);
+        t.start = Math.min(t.start, base);
       }
     }
-    let movieDur = 0;
-    for (const t of tracks.values()) if (t.scale && t.end) movieDur = Math.max(movieDur, Math.round(t.end / t.scale * movieScale));
+    // トラックの長さ＝最後のかたまりの終わり−最初のかたまりの始まり
+    for (const t of tracks.values()) t.len = t.end && Number.isFinite(t.start) ? t.end - t.start : 0;
+    let sec = 0;
+    for (const t of tracks.values()) if (t.scale && t.len) sec = Math.max(sec, t.len / t.scale);
+    // 録画した時間と大きく違えば、計算をあきらめて録画した時間を使う
+    if (expectedSec > 0 && (!sec || Math.abs(sec - expectedSec) > Math.max(2, expectedSec * 0.1))) {
+      sec = expectedSec;
+      for (const t of tracks.values()) t.len = Math.round(expectedSec * t.scale);
+    }
+    const movieDur = Math.round(sec * movieScale);
     if (!movieDur || movieDur > 0xffffffff) return blob;
     // 頭の欄に長さを書く（元の並びは変えずに、値だけ書きかえる）
     const out = new Uint8Array(buf.byteLength + (absolute ? 0 : 16));
@@ -97,9 +107,9 @@ export async function fixMp4Duration(blob) {
     const w = new DataView(src.buffer.slice(0));
     setDur(w, mvhd.o, mvV, 16, 24, movieDur);
     for (const t of tracks.values()) {
-      if (!t.end) continue;
-      setDur(w, t.tkhd.o, t.tkV, 20, 28, Math.round(t.end / t.scale * movieScale));
-      setDur(w, t.mdhd.o, t.mdV, 16, 24, t.end);
+      if (!t.len) continue;
+      setDur(w, t.tkhd.o, t.tkV, 20, 28, Math.round(t.len / t.scale * movieScale));
+      setDur(w, t.mdhd.o, t.mdV, 16, 24, t.len);
     }
     const fixed = new Uint8Array(w.buffer);
     if (absolute) return new Blob([fixed], { type: blob.type });

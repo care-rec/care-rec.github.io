@@ -274,7 +274,7 @@ $('recBtn').addEventListener('click', async () => {
       const rec = await recorder.stop();
       const { type, durationMs } = rec;
       // 録画した mp4 に正しい長さを書き込む（iPhone が長さを読み違えて、途中までしか扱えなくなるのを防ぐ）
-      const blob = /mp4/.test(type) ? await fixMp4Duration(rec.blob) : rec.blob;
+      const blob = /mp4/.test(type) ? await fixMp4Duration(rec.blob, durationMs / 1000) : rec.blob;
       const clearLog = camera.clearLog || [];
       camera.clearLog = null;
       btn.setAttribute('aria-label', '録画開始');
@@ -363,9 +363,10 @@ let trackJob = null;   // 手動ぼかしの自動追いかけ
 
 const fmt = (t) => { t = Math.max(0, t || 0); return `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`; };
 function durSec() {
-  // iPhone は録画の長さを短く読み違えることがあるので、録画した時間と比べて長いほうを使う
+  // 動画の長さは、アプリで測った録画の時間を正しいものとして使う（iPhone は動画の長さを読み違えることがあるため）
+  if (result && result.durationMs > 0) return result.durationMs / 1000;
   const d = $('review').duration;
-  return Math.max(Number.isFinite(d) && d > 0 ? d : 0, result ? result.durationMs / 1000 : 0);
+  return Number.isFinite(d) && d > 0 ? d : 0;
 }
 
 // off：ふつうの確認 ／ edit：囲みを作る ／ busy：反映中 ／ scan：見逃した顔を探している
@@ -642,6 +643,10 @@ $('saveBtn').addEventListener('click', async () => {
     $('saveMsg').textContent = '保存をやめました。もう一度「保存する」を押せます。';
   }
 });
+
+// ---- 版の表示（いま動いている版を確かめられるように。sw.js の VERSION と同じにする） ----
+const APP_VERSION = 'v24';
+$('appVer').textContent = `ケアREC ${APP_VERSION}`;
 
 // ---- 通信がなくても起動できるようにする ----
 if ('serviceWorker' in navigator) {

@@ -213,3 +213,5 @@ html.camOn, html.camOn body { background: #000; }
 
 .maskPanel .trackBox { display: grid; gap: 6px; }
 .maskPanel .trackBox .note { margin: 0; }
+
+.appVer { margin: 8px 0 0; color: #889; font-size: 13px; }

@@ -516,8 +516,8 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       v.pause();
       if (cancelled) throw new Error('cancelled');
       const W = v.videoWidth, H = v.videoHeight;
-      // iPhone は録画の長さを短く読み違えることがあるので、録画した時間と比べて長いほうを使う
-      const dur = Math.max(Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0, durationSec || 0);
+      // 動画の長さは、アプリで測った録画の時間を正しいものとして使う（iPhone は動画の長さを読み違えることがあるため）
+      const dur = durationSec > 0 ? durationSec : (Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0);
       const c = document.createElement('canvas');
       c.width = W; c.height = H;
       const g = c.getContext('2d', { alpha: false });
@@ -573,7 +573,7 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       // 最後まで読めずに途中で終わった動画は渡さない（短くなった動画を保存してしまわないため）
       if (durationSec && reached < durationSec - 1.5) throw new Error('short');
       const type = (rec.mimeType || chunks[0]?.type || 'video/mp4').split(';')[0];
-      const out = await fixMp4Duration(new Blob(chunks, { type }));
+      const out = await fixMp4Duration(new Blob(chunks, { type }), reached);
       return { blob: out, type };
     } finally {
       try { if (rec && rec.state !== 'inactive') rec.stop(); } catch (e) { /* 何もしない */ }
