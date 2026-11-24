@@ -5,6 +5,7 @@
 // 映像はこのスマホの中だけで処理し、どこにも送らない。
 import { pickMimeType } from './recorder.js';
 import { PatchTracker, seekFrame } from './track.js';
+import { fixMp4Duration } from './mp4fix.js';
 
 const MIN_SIDE = 16;          // これより小さい囲みは作らない（映像の画素）
 const HANDLE_CSS = 26;        // 大きさを変えるつまみの大きさ（画面上の点）
@@ -515,7 +516,8 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       v.pause();
       if (cancelled) throw new Error('cancelled');
       const W = v.videoWidth, H = v.videoHeight;
-      const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : durationSec || 0;
+      // iPhone は録画の長さを短く読み違えることがあるので、録画した時間と比べて長いほうを使う
+      const dur = Math.max(Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0, durationSec || 0);
       const c = document.createElement('canvas');
       c.width = W; c.height = H;
       const g = c.getContext('2d', { alpha: false });
@@ -541,6 +543,7 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       rec.start(1000);
 
       // 再生しながら描く
+      let reached = 0;
       await new Promise((done) => {
         let lastT = -1, stuckAt = performance.now();
         // 再生が止まってコマが来なくなっても、待ち続けないようにする
@@ -552,7 +555,7 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
           const t = meta && typeof meta.mediaTime === 'number' ? meta.mediaTime : v.currentTime;
           paint(t);
           if (onProgress && dur) onProgress(Math.min(1, t / dur));
-          if (t !== lastT) { lastT = t; stuckAt = performance.now(); }
+          if (t !== lastT) { lastT = t; stuckAt = performance.now(); reached = Math.max(reached, t); }
           if (v.ended || (dur && t >= dur - 0.03)) return resolve();
           // 再生が止まったまま進まなければ、そこで終える
           if (performance.now() - stuckAt > 4000) return resolve();
@@ -567,8 +570,11 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       rec.stop();
       await stopped;
       if (cancelled) throw new Error('cancelled');
+      // 最後まで読めずに途中で終わった動画は渡さない（短くなった動画を保存してしまわないため）
+      if (durationSec && reached < durationSec - 1.5) throw new Error('short');
       const type = (rec.mimeType || chunks[0]?.type || 'video/mp4').split(';')[0];
-      return { blob: new Blob(chunks, { type }), type };
+      const out = await fixMp4Duration(new Blob(chunks, { type }));
+      return { blob: out, type };
     } finally {
       try { if (rec && rec.state !== 'inactive') rec.stop(); } catch (e) { /* 何もしない */ }
       try { ac && ac.close(); } catch (e) { /* 何もしない */ }

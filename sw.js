@@ -1,7 +1,7 @@
 // 通信がなくても起動できるように、アプリの部品をスマホの中に保存しておく仕組み（サービスワーカー）。
 // 撮影した映像はここでは一切扱わない。保存するのはアプリの部品だけ。
 
-const VERSION = 'v22';
+const VERSION = 'v23';
 const CACHE = 'kaigo-camera-' + VERSION;   // 名前を変えると古い保存分が消えなくなるので、接頭辞はそのまま
 
 // 最初に開いたときに、まとめて保存する部品
@@ -15,6 +15,7 @@ const PRECACHE = [
   './redact.js',
   './rescan.js',
   './track.js',
+  './mp4fix.js',
   './face-id.js',
   './yunet.js',
   './yunet-worker.js',

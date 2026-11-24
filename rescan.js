@@ -81,7 +81,8 @@ export function findMissedFaces(blob, { camera, clearLog = [], durationSec = 0, 
       if (!v.videoWidth) await new Promise((r) => { v.addEventListener('loadedmetadata', r, { once: true }); setTimeout(r, 5000); });
       const W = v.videoWidth, H = v.videoHeight;
       if (!W || !H) throw new Error('動画を読み込めませんでした');
-      const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : durationSec;
+      // iPhone は録画の長さを短く読み違えることがあるので、録画した時間と比べて長いほうを使う
+      const dur = Math.max(Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0, durationSec || 0);
       // 顔検出の部品：撮影で使ったものを借りる。無ければここで読み込む
       yunet = camera && camera.yunet;
       if (!yunet) { yunet = new YuNetDetector(); ownY = await yunet.load(); if (!ownY) yunet = null; }

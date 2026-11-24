@@ -5,6 +5,7 @@ import { CanvasRecorder, buildFileName, saveVideo } from './recorder.js';
 const $ = (id) => document.getElementById(id);
 import { RedactEditor, exportRedacted } from './redact.js';
 import { findMissedFaces } from './rescan.js';
+import { fixMp4Duration } from './mp4fix.js';
 
 // 場面ごとの、最初から入っている項目。タブごとに並べ替え・削除・追加ができる
 const SETS = [
@@ -270,7 +271,10 @@ $('recBtn').addEventListener('click', async () => {
       recorder.setAudio(micOn);
     } else {
       const startedDate = new Date(Date.now() - recorder.elapsedMs);
-      const { blob, type, durationMs } = await recorder.stop();
+      const rec = await recorder.stop();
+      const { type, durationMs } = rec;
+      // 録画した mp4 に正しい長さを書き込む（iPhone が長さを読み違えて、途中までしか扱えなくなるのを防ぐ）
+      const blob = /mp4/.test(type) ? await fixMp4Duration(rec.blob) : rec.blob;
       const clearLog = camera.clearLog || [];
       camera.clearLog = null;
       btn.setAttribute('aria-label', '録画開始');
@@ -359,8 +363,9 @@ let trackJob = null;   // 手動ぼかしの自動追いかけ
 
 const fmt = (t) => { t = Math.max(0, t || 0); return `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`; };
 function durSec() {
+  // iPhone は録画の長さを短く読み違えることがあるので、録画した時間と比べて長いほうを使う
   const d = $('review').duration;
-  return Number.isFinite(d) && d > 0 ? d : (result ? result.durationMs / 1000 : 0);
+  return Math.max(Number.isFinite(d) && d > 0 ? d : 0, result ? result.durationMs / 1000 : 0);
 }
 
 // off：ふつうの確認 ／ edit：囲みを作る ／ busy：反映中 ／ scan：見逃した顔を探している
@@ -596,7 +601,7 @@ $('maskApply').addEventListener('click', () => {
     $('maskDoneNote').textContent = `手動ぼかしを${n}か所反映しました。まだ保存されていません。再生して隠れているか確かめてから、下の「保存する」を押してください。直すときは、もう一度「名札などを手で隠す」を押します。`;
     $('maskDoneNote').hidden = false;
     $('saveMsg').textContent = '';
-  }).catch(() => {
+  }).catch((err) => {
     if (!result || exportJob !== job) return;
     // 中止・失敗：囲みはそのまま残して、作る画面に戻る
     setReviewSrc(result.origUrl);
@@ -605,7 +610,9 @@ $('maskApply').addEventListener('click', () => {
     renderMaskUi();
     flashReview(exportLost
       ? '画面が消えたため、反映を中止しました。画面をつけたまま、もう一度「反映して確認に戻る」を押してください。'
-      : '反映を中止しました。');
+      : err && err.message === 'short'
+        ? '動画を最後まで読み込めなかったため、反映を中止しました（途中までの動画になるのを防ぐため）。もう一度「反映して確認に戻る」を押してください。'
+        : '反映を中止しました。');
   }).finally(() => {
     if (exportJob === job) exportJob = null;
     try { lock?.release(); } catch (e) { /* 何もしない */ }
