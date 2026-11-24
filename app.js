@@ -152,7 +152,8 @@ window.__kaigoRecorder = recorder;
 camera.onToggle = () => { $('hint').hidden = true; };
 let wakeLock = null;
 let timerId = null;
-let result = null; // { blob, url, fileName }
+let result = null;
+let recPoster = '';   // 録画を始めたときの画面（確認画面の表紙） // { blob, url, fileName }
 
 function setStatus(text) {
   $('status').hidden = !text;
@@ -258,6 +259,8 @@ $('recBtn').addEventListener('click', async () => {
       camera.lock(true);
       const { audioOk } = await recorder.start({ audio: micOn });
       camera.clearLog = []; camera.clearLogAt = performance.now(); camera.clearLogLast = 0;
+      // 確認画面の表紙にする絵（録画される、ぼかし済みの画面）。iPhone では再生を押すまで動画が真っ黒なため
+      try { recPoster = camera.out.toDataURL('image/jpeg', 0.7); } catch (e) { recPoster = ''; }
       btn.classList.add('on');
       btn.setAttribute('aria-label', '録画停止');
       $('recBadge').hidden = false;
@@ -279,7 +282,7 @@ $('recBtn').addEventListener('click', async () => {
       camera.clearLog = null;
       btn.setAttribute('aria-label', '録画開始');
       leaveCamera();
-      openReview(blob, type, startedDate, durationMs);
+      openReview(blob, type, startedDate, durationMs, recPoster);
       result.clearLog = clearLog;
     }
   } catch (e) {
@@ -307,10 +310,11 @@ document.addEventListener('visibilitychange', async () => {
 
 // ---- 画面3：確認 ----
 // result.orig：撮ったままの動画（自動ぼかし済み）。result.blob：保存する動画（手動ぼかしを入れたらその動画）
-function openReview(blob, type, date, durationMs) {
+function openReview(blob, type, date, durationMs, poster = '') {
   const fileName = buildFileName(selected, date, type);
   const url = URL.createObjectURL(blob);
-  result = { orig: blob, origUrl: url, blob, url, fileName, type, durationMs };
+  // poster：表紙の絵。手動ぼかしを反映したら、反映後の動画の最初の場面に入れかえる
+  result = { orig: blob, origUrl: url, blob, url, fileName, type, durationMs, origPoster: poster, poster };
   editor.reset();
   $('reviewName').textContent = fileName;
   setReviewSrc(url);
@@ -335,6 +339,9 @@ function renderInfo() {
 
 function setReviewSrc(url) {
   const v = $('review');
+  // 表紙の絵は、いま出す動画に合ったもの（手動ぼかしの前後で取りちがえない）
+  const poster = result ? (url === result.origUrl ? result.origPoster : result.poster) : '';
+  if (poster) v.poster = poster; else v.removeAttribute('poster');
   if (v.getAttribute('src') !== url) v.src = url;
 }
 
@@ -344,7 +351,7 @@ function dropResult() {
   if (scanJob) scanJob.cancel();
   if (trackJob) trackJob.cancel();
   const v = $('review');
-  v.pause(); v.removeAttribute('src'); v.load();
+  v.pause(); v.removeAttribute('src'); v.removeAttribute('poster'); v.load();
   URL.revokeObjectURL(result.origUrl);
   if (result.url !== result.origUrl) URL.revokeObjectURL(result.url);
   result = null;
@@ -590,11 +597,12 @@ $('maskApply').addEventListener('click', () => {
   setMaskMode('busy');
   let lock = null;
   navigator.wakeLock?.request('screen').then((l) => { lock = l; }).catch(() => {});
-  job.done.then(({ blob, type }) => {
+  job.done.then(({ blob, type, poster }) => {
     if (!result || exportJob !== job) return;
     if (!blob.size) throw new Error('empty');
     if (result.url !== result.origUrl) URL.revokeObjectURL(result.url);
     result.blob = blob; result.type = type; result.url = URL.createObjectURL(blob);
+    result.poster = poster || '';
     setMaskMode('off');
     setReviewSrc(result.url);
     renderInfo();
@@ -645,7 +653,7 @@ $('saveBtn').addEventListener('click', async () => {
 });
 
 // ---- 版の表示（いま動いている版を確かめられるように。sw.js の VERSION と同じにする） ----
-const APP_VERSION = 'v26';
+const APP_VERSION = 'v27';
 $('appVer').textContent = `ケアREC ${APP_VERSION}`;
 
 // ---- 通信がなくても起動できるようにする ----

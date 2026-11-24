@@ -529,6 +529,9 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       v.currentTime = 0;
       await new Promise((r) => { v.addEventListener('seeked', r, { once: true }); setTimeout(r, 1500); });
       paint(0);
+      // 確認画面の表紙にする絵（手動ぼかしを入れた最初の場面）
+      let poster = '';
+      try { poster = c.toDataURL('image/jpeg', 0.7); } catch (e) { /* 表紙なし */ }
 
       const mime = pickMimeType();
       if (mime === null || !c.captureStream) throw new Error('この端末では書き出しができません');
@@ -574,7 +577,7 @@ export function exportRedacted(blob, masks, { durationSec, onProgress } = {}) {
       if (durationSec && reached < durationSec - 1.5) throw new Error('short');
       const type = (rec.mimeType || chunks[0]?.type || 'video/mp4').split(';')[0];
       const out = await normalizeMp4(new Blob(chunks, { type }), reached);
-      return { blob: out, type };
+      return { blob: out, type, poster };
     } finally {
       try { if (rec && rec.state !== 'inactive') rec.stop(); } catch (e) { /* 何もしない */ }
       try { ac && ac.close(); } catch (e) { /* 何もしない */ }
