@@ -150,7 +150,7 @@
         <h4>ぼかしを入れる</h4>
         <p>「＋ ぼかしを追加」を押すと、まん中にだ円のぼかしが出ます。指1本で動かし、2本の指で広げたり縮めたりできます。隠したい所を指でなぞって囲むこともできます。右下の黄色い丸を動かすと、縦と横の長さを別々に変えられます。入れたぼかしは、最初から最後まで入ります。</p>
         <h4>一部の時間だけ隠す</h4>
-        <p>ぼかしを選ぶと出る「隠す時間」の、緑の帯の間だけ隠します。上の再生バーで場面を選んでから「今の場面から隠す」「今の場面まで隠す」を押します。「今の場面まで隠す」だけを押すと最初から今の場面まで、「今の場面から隠す」だけを押すと今の場面から最後まで隠します。</p>
+        <p>ぼかしを選ぶと出る「隠す時間」の、色の付いた帯の間だけ隠します。上の再生バーで場面を選んでから「今の場面から隠す」「今の場面まで隠す」を押します。「今の場面まで隠す」だけを押すと最初から今の場面まで、「今の場面から隠す」だけを押すと今の場面から最後まで隠します。</p>
         <h4>名札などが動くとき</h4>
         <p>ぼかしは、置いただけでは動きません。名札の上にぼかしを合わせてから、動画のすぐ下の「このぼかしを自動で追いかける」を押すと、今の場面から先へ、ぼかしが名札を追いかけます。名札が隠れたり裏返ったりして見失うと、そこで止まります。その場面で指で位置を合わせてから、もう一度押してください。</p>
         <p>自動で追いかけられないときは、上の再生バーで少し先の場面へ進め、ぼかしを指で名札の上に合わせる、をくり返します。動かした場面には帯の上に白い点が付き、点と点の間はぼかしがなめらかに移ります。</p>
@@ -174,7 +174,7 @@
           <div class="track"><span id="lineRange" class="rng"></span><span id="lineNow" class="now"></span><span id="lineKeys"></span></div>
           <div class="ends"><span>0:00</span><span id="lineEnd">0:00</span></div>
         </div>
-        <p class="note">緑の帯の間だけ隠します。再生バーで場面を選んでから押してください。</p>
+        <p class="note">色の付いた帯の間だけ隠します。再生バーで場面を選んでから押してください。</p>
         <div class="seg three">
           <button type="button" id="maskFrom">今の場面から隠す</button>
           <button type="button" id="maskTo">今の場面まで隠す</button>
@@ -184,8 +184,8 @@
       </div>
       <p class="note applyNote">ここではまだ<strong>保存されません</strong>。「反映して確認に戻る」を押すと、ぼかしを入れた動画を確認の画面で再生できます。確かめてから、そこで「保存する」を押します。</p>
       <div class="bottomBar two">
-        <button id="maskCancel" type="button" class="btn sub">反映せずに戻る</button>
-        <button id="maskApply" type="button" class="btn primary" disabled>反映して確認に戻る</button>
+        <button id="maskCancel" type="button" class="btn sub">反映せずに<br>戻る</button>
+        <button id="maskApply" type="button" class="btn primary" disabled>反映して確認に<br>戻る</button>
       </div>
     </div>
     <div id="maskProgress" hidden>
@@ -197,7 +197,7 @@
   </section>
 
   <div id="reviewBottom" class="bottomBar two">
-    <button id="discardBtn" class="btn danger">撮り直す（破棄）</button>
+    <button id="discardBtn" class="btn danger">撮り直す<br>（破棄）</button>
     <button id="saveBtn" class="btn primary">保存する</button>
   </div>
   <p id="saveMsg" class="note center"></p>

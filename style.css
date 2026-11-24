@@ -245,7 +245,7 @@ html.camOn, html.camOn body { background: #000; }
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .tile img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 10px; pointer-events: none; }
-.tile span { word-break: break-all; }
+.tile span { word-break: keep-all; white-space: pre-line; }
 .tile:active { transform: scale(.97); }
 .tile.on { border-color: var(--accent); background: var(--accent-soft); color: #a64b28; }
 .tile.on img { mix-blend-mode: multiply; }
@@ -273,3 +273,4 @@ html.camOn, html.camOn body { background: #000; }
 .help summary { font-weight: 800; }
 .maskPanel .foundNote { background: #fdeee3; color: #7a3a1d; }
 .maskPanel .howTo { background: #fffaf4; }
+.bottomBar.two .btn, .maskPanel .bottomBar .btn, #maskApply, #maskCancel, #discardBtn { white-space: pre-line; line-height: 1.35; }

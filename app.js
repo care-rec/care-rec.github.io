@@ -83,7 +83,8 @@ function renderTitles() {
     const img = document.createElement('img');
     img.src = iconFor(name); img.alt = ''; img.decoding = 'async';
     const label = document.createElement('span');
-    label.textContent = name;
+    // 長い名前は「訓練」などの区切りで折り返す（例：関節可動域／訓練）
+    label.textContent = name.length > 6 ? name.replace(/(訓練|介助|練習|交換|移乗|注入|ケア)$/, '\n$1') : name;
     b.append(img, label);
     b.addEventListener('click', () => { selected = name; renderTitles(); });
     list.appendChild(b);
@@ -525,10 +526,10 @@ function renderMaskUi() {
     renderMaskLine();
   }
   $('maskApply').disabled = !result || (!ms.length && result.blob === result.orig);
-  $('maskApply').textContent = !ms.length && result && result.blob !== result.orig ? '手動ぼかしをすべて外して戻る' : '反映して確認に戻る';
+  $('maskApply').textContent = !ms.length && result && result.blob !== result.orig ? '手動ぼかしをすべて外して\n戻る' : '反映して確認に\n戻る';
 }
 
-// 「隠す時間」の帯：隠す時間（緑）、位置を決めた場面（白い点）、いまの場面（縦線）
+// 「隠す時間」の帯：隠す時間（色の付いた帯）、位置を決めた場面（白い点）、いまの場面（縦線）
 function renderMaskLine() {
   const sel = editor.sel, d = durSec();
   if (!sel || !d) return;
@@ -666,7 +667,7 @@ $('saveBtn').addEventListener('click', async () => {
 });
 
 // ---- 版の表示（いま動いている版を確かめられるように。sw.js の VERSION と同じにする） ----
-const APP_VERSION = 'v28';
+const APP_VERSION = 'v29';
 $('appVer').textContent = `ケアREC ${APP_VERSION}`;
 
 // ---- 通信がなくても起動できるようにする ----
