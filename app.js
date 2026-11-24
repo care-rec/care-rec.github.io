@@ -645,7 +645,7 @@ $('saveBtn').addEventListener('click', async () => {
 });
 
 // ---- 版の表示（いま動いている版を確かめられるように。sw.js の VERSION と同じにする） ----
-const APP_VERSION = 'v24';
+const APP_VERSION = 'v25';
 $('appVer').textContent = `ケアREC ${APP_VERSION}`;
 
 // ---- 通信がなくても起動できるようにする ----

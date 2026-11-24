@@ -3,7 +3,8 @@
 // 長さの欄が 0 のまま。そのため iPhone の再生部品が長さを読み違え（例：1分6秒の動画を28秒と思う）、
 // 手動ぼかしの書き出しや探し直しが途中で終わってしまう。
 // そこで、かたまりごとの長さを足し合わせて本当の長さを求め、頭の欄（mvhd・tkhd・mdhd）に書き、
-// かたまりつなぎの全体の長さ（mehd）も加える。映像そのものは変えない。
+// かたまりつなぎの全体の長さ（mehd）も加える。動画の中の時刻が0秒から始まっていなければ、0秒始まりにそろえる。
+// 映像そのものは変えない。
 // 形が想定と違うときは、何もせず元のまま返す。
 
 const u32 = (v, o) => v.getUint32(o);
@@ -58,6 +59,7 @@ export async function fixMp4Duration(blob, expectedSec = 0) {
     if (children(v, mvex.o + 8, mvex.o + mvex.size).some((b) => b.t === 'mehd')) return blob;
     // かたまりごとに、始まりの時刻と長さを足して、トラックの終わりを求める
     let absolute = false;
+    const tfdts = [];   // かたまりごとの始まりの時刻の欄（あとで0秒始まりにそろえる）
     for (const mf of top.filter((b) => b.t === 'moof')) {
       for (const tf of children(v, mf.o + 8, mf.o + mf.size).filter((b) => b.t === 'traf')) {
         const kids = children(v, tf.o + 8, tf.o + tf.size);
@@ -73,7 +75,10 @@ export async function fixMp4Duration(blob, expectedSec = 0) {
         const def = fl & 0x08 ? u32(v, p) : t.defDur;
         const tfdt = find(kids, 'tfdt');
         let base = 0;
-        if (tfdt) base = v.getUint8(tfdt.o + 8) === 1 ? Number(v.getBigUint64(tfdt.o + 12)) : u32(v, tfdt.o + 12);
+        if (tfdt) {
+          base = v.getUint8(tfdt.o + 8) === 1 ? Number(v.getBigUint64(tfdt.o + 12)) : u32(v, tfdt.o + 12);
+          tfdts.push({ o: tfdt.o, ver: v.getUint8(tfdt.o + 8), base, t });
+        }
         let sum = 0;
         for (const tr of kids.filter((b) => b.t === 'trun')) {
           const tfl = u32(v, tr.o + 8) & 0xffffff, n = u32(v, tr.o + 12);
@@ -106,6 +111,16 @@ export async function fixMp4Duration(blob, expectedSec = 0) {
     };
     const w = new DataView(src.buffer.slice(0));
     setDur(w, mvhd.o, mvV, 16, 24, movieDur);
+    // 動画の中の時刻が0秒から始まっていないとき（録画の部品が動き出してからの時間が付いている）は、
+    // 全部のトラックを同じだけ前にずらして0秒始まりにする（音と映像のずれは変わらない）
+    let off = Infinity;
+    for (const t of tracks.values()) if (t.scale && Number.isFinite(t.start)) off = Math.min(off, t.start / t.scale);
+    if (Number.isFinite(off) && off > 0.001) {
+      for (const d of tfdts) {
+        const nb = Math.max(0, d.base - Math.round(off * d.t.scale));
+        if (d.ver === 1) w.setBigUint64(d.o + 12, BigInt(nb)); else w.setUint32(d.o + 12, nb);
+      }
+    }
     for (const t of tracks.values()) {
       if (!t.len) continue;
       setDur(w, t.tkhd.o, t.tkV, 20, 28, Math.round(t.len / t.scale * movieScale));
